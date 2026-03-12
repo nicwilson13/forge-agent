@@ -115,6 +115,18 @@ def main():
         action="store_true",
         help="Show cost report from .forge/cost_log.jsonl",
     )
+    status_p.add_argument(
+        "--log",
+        action="store_true",
+        help="Show recent build log entries",
+    )
+    status_p.add_argument(
+        "--log-tail",
+        type=int,
+        default=20,
+        metavar="N",
+        help="Number of recent log entries to show (default: 20)",
+    )
 
     # forge checkin
     subparsers.add_parser("checkin", help="Interactively resolve NEEDS_HUMAN items")
@@ -155,7 +167,8 @@ def main():
 
     elif args.command == "status":
         from forge.commands.status import run_status
-        run_status(project_dir, show_cost=args.cost)
+        run_status(project_dir, show_cost=args.cost,
+                   show_log=args.log, log_tail=args.log_tail)
 
     elif args.command == "checkin":
         from forge.commands.checkin import run_checkin

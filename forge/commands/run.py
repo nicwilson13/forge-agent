@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from forge import orchestrator, builder, git_utils, needs_human, display, checkpoint
+from forge.build_logger import BuildLogger
 from forge.cost_tracker import CostTracker, TokenUsage, calculate_task_cost
 from forge.memory import (
     ensure_memory_dir, extract_memory_from_qa,
@@ -64,12 +65,16 @@ def _clear_interrupt_handler() -> None:
 
 
 def _handle_fatal_error(project_dir: Path, state: ForgeState,
-                        task: Task | None, error: FatalAPIError) -> None:
+                        task: Task | None, error: FatalAPIError,
+                        logger: BuildLogger | None = None) -> None:
     """Handle a non-retryable error - save state and exit."""
     if task is not None:
         task.status = TaskStatus.INTERRUPTED
         task.interrupt_reason = error.error_prefix
     checkpoint.atomic_save(project_dir, state)
+
+    if logger:
+        logger.fatal_error(error.error_prefix, str(error))
 
     print(f"\n  {display.SYM_FAIL} Authentication failed. Forge cannot continue.\n")
     print(f"  {error}")
@@ -101,6 +106,7 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
     state = load_state(project_dir)
     loop_guard = LoopGuard(max_retries=max_retries)
     tracker = CostTracker(project_dir)
+    logger = BuildLogger(project_dir)
     build_start_time = time.time()
 
     display.print_forge_header(project_dir.name)
@@ -129,13 +135,18 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
         try:
             _initial_setup(project_dir, state, dry_run)
         except FatalAPIError as e:
-            _handle_fatal_error(project_dir, state, None, e)
+            _handle_fatal_error(project_dir, state, None, e, logger)
         except RetryExhaustedError as e:
             _handle_retry_exhausted(project_dir, state, None, e)
         checkpoint.atomic_save(project_dir, state)
         if dry_run:
             display.print_dry_run_plan(state.phases)
             return
+
+    logger.session_started(
+        project_name=state.project_name or project_dir.name,
+        phase_count=len(state.phases),
+    )
 
     # -----------------------------------------------------------------------
     # Main loop
@@ -158,13 +169,14 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
             try:
                 tasks, _ = orchestrator.generate_tasks(project_dir, phase, state)
             except FatalAPIError as e:
-                _handle_fatal_error(project_dir, state, None, e)
+                _handle_fatal_error(project_dir, state, None, e, logger)
             except RetryExhaustedError as e:
                 _handle_retry_exhausted(project_dir, state, None, e)
             phase.tasks = tasks
             phase.status = PhaseStatus.IN_PROGRESS
             checkpoint.atomic_save(project_dir, state)
             print(f"  Generated {len(tasks)} tasks")
+            logger.phase_started(state.current_phase_index, phase.title, len(tasks))
 
             # Pre-park tasks flagged as NEEDS_HUMAN by the planner
             for task in tasks:
@@ -178,7 +190,7 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
 
         if task is None:
             # All tasks done or parked - review the phase
-            _complete_phase(project_dir, state, phase, loop_guard, phase_start_time, tracker)
+            _complete_phase(project_dir, state, phase, loop_guard, phase_start_time, tracker, logger)
             checkpoint.atomic_save(project_dir, state)
             phase_start_time = time.time()
             continue
@@ -196,7 +208,7 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
 
         # Execute the task
         _execute_task(project_dir, state, phase, task, loop_guard,
-                      max_retries, dry_run, tracker)
+                      max_retries, dry_run, tracker, logger)
         checkpoint.atomic_save(project_dir, state)
 
     build_duration = time.time() - build_start_time
@@ -208,6 +220,11 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
     )
     if tracker.session_total_cost() > 0:
         print(tracker.format_session_summary())
+    logger.session_ended(
+        tasks_completed=state.tasks_completed,
+        total_cost=tracker.session_total_cost(),
+        duration_secs=build_duration,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +272,8 @@ def _initial_setup(project_dir: Path, state: ForgeState, dry_run: bool):
 def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
                   task: Task, loop_guard: LoopGuard,
                   max_retries: int, dry_run: bool,
-                  tracker: CostTracker | None = None):
+                  tracker: CostTracker | None = None,
+                  logger: BuildLogger | None = None):
     task_index = phase.tasks.index(task)
     total_tasks = len(phase.tasks)
 
@@ -296,6 +314,9 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
     # Mark task as started with checkpoint
     _setup_interrupt_handler(project_dir, state, task)
     checkpoint.mark_task_started(project_dir, state, task)
+    if logger:
+        logger.task_started(state.current_phase_index, task.id,
+                            task.title, task.retry_count)
 
     if dry_run:
         _clear_interrupt_handler()
@@ -313,7 +334,7 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
         success, stdout, stderr, duration = builder.run_task(project_dir, prompt)
     except FatalAPIError as e:
         _clear_interrupt_handler()
-        _handle_fatal_error(project_dir, state, task, e)
+        _handle_fatal_error(project_dir, state, task, e, logger)
         return
     except RetryExhaustedError as e:
         _clear_interrupt_handler()
@@ -336,6 +357,7 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
                         "       export ANTHROPIC_API_KEY=sk-ant-your-new-key"
                     ),
                 ),
+                logger,
             )
             return
 
@@ -348,13 +370,17 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
             task, test_out, stderr + test_err
         )
     except FatalAPIError as e:
-        _handle_fatal_error(project_dir, state, task, e)
+        _handle_fatal_error(project_dir, state, task, e, logger)
         return
     except RetryExhaustedError as e:
         _handle_retry_exhausted(project_dir, state, task, e)
         return
 
     if qa_passed:
+        if logger:
+            logger.qa_passed(state.current_phase_index, task.id,
+                             task.title, qa_summary or "")
+
         task.status = TaskStatus.DONE
         task.notes = qa_summary
         task.completed_at = _now()
@@ -375,8 +401,9 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
         )
 
         # Record cost
+        task_cost_val = None
         if tracker:
-            task_cost = calculate_task_cost(
+            task_cost_val = calculate_task_cost(
                 task_id=task.id,
                 task_title=task.title,
                 phase_index=state.current_phase_index,
@@ -386,10 +413,18 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
                 builder_prompt_chars=len(prompt),
                 builder_output_chars=len(stdout),
             )
-            alerts = tracker.record_task(task_cost)
-            print(f"  {tracker.format_task_line(task_cost)}")
+            alerts = tracker.record_task(task_cost_val)
+            print(f"  {tracker.format_task_line(task_cost_val)}")
             for alert in alerts:
                 print(f"\n  {display.SYM_WARN} {alert}")
+
+        if logger:
+            cost = task_cost_val.total_cost if task_cost_val else 0.0
+            tokens_in = (task_cost_val.orchestrator.input_tokens + task_cost_val.builder.input_tokens) if task_cost_val else 0
+            tokens_out = (task_cost_val.orchestrator.output_tokens + task_cost_val.builder.output_tokens) if task_cost_val else 0
+            logger.task_completed(state.current_phase_index, task.id,
+                                  task.title, duration, cost,
+                                  tokens_in, tokens_out)
 
         # Extract and record memory from QA summary
         if qa_summary:
@@ -401,19 +436,27 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
                     project_dir, title, decision, rationale,
                     phase_title=phase.title, task_title=task.title
                 )
+                if logger:
+                    logger.memory_recorded("decision", title)
             for name, description in memory_items.get("patterns", []):
                 record_pattern(project_dir, name, description)
+                if logger:
+                    logger.memory_recorded("pattern", name)
             for what, why, instead in memory_items.get("failures", []):
                 record_failure(
                     project_dir, what, why, instead,
                     phase_title=phase.title
                 )
+                if logger:
+                    logger.memory_recorded("failure", what)
 
         # Commit
         commit_msg = f"[forge] {task.title} ({task.id})"
         hash_ = git_utils.commit_and_push(project_dir, commit_msg)
         if hash_:
             task.commit_hash = hash_
+            if logger:
+                logger.git_committed(hash_, commit_msg)
         else:
             # Commit failed - mark as commit pending
             checkpoint.mark_task_commit_pending(project_dir, state, task)
@@ -421,6 +464,10 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
             print("  Run `forge run` to retry the commit.")
 
     else:
+        if logger:
+            logger.qa_failed(state.current_phase_index, task.id,
+                             task.title, qa_summary or "")
+
         task.retry_count += 1
         task.notes = retry_prompt or qa_summary
         task.status = TaskStatus.FAILED
@@ -432,12 +479,21 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
             task.park_reason = reason
             needs_human.append_item(project_dir, task, reason)
             display.print_task_parked(task.id)
+            if logger:
+                logger.task_parked(state.current_phase_index, task.id,
+                                   task.title, reason)
         else:
             display.print_task_failure(
                 retry_count=task.retry_count,
                 max_retries=max_retries,
                 reason=qa_summary,
             )
+            if logger:
+                logger.task_failed(
+                    state.current_phase_index, task.id, task.title,
+                    qa_summary or "", task.retry_count,
+                    will_retry=task.retry_count < max_retries,
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -446,13 +502,14 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
 
 def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
                     loop_guard: LoopGuard, phase_start_time: float,
-                    tracker: CostTracker | None = None):
+                    tracker: CostTracker | None = None,
+                    logger: BuildLogger | None = None):
     print(f"\n[forge] Running phase QA review...")
 
     try:
         approved, notes, _ = orchestrator.evaluate_phase(project_dir, phase)
     except FatalAPIError as e:
-        _handle_fatal_error(project_dir, state, None, e)
+        _handle_fatal_error(project_dir, state, None, e, logger)
     except RetryExhaustedError as e:
         _handle_retry_exhausted(project_dir, state, None, e)
     phase.qa_notes = notes
@@ -467,6 +524,11 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
     next_phase_title = None
     if next_index < len(state.phases):
         next_phase_title = state.phases[next_index].title
+
+    phase_cost = 0.0
+    if tracker:
+        ps = tracker.phase_summary(state.current_phase_index)
+        phase_cost = ps["cost"]
 
     if approved:
         phase.status = PhaseStatus.DONE
@@ -484,6 +546,9 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
             if ps["tasks"] > 0:
                 session_total = _format_cost(tracker.session_total_cost())
                 print(f"  Tokens: {ps['input_tokens']:,} in / {ps['output_tokens']:,} out  Cost: {_format_cost(ps['cost'])}  Session total: {session_total}")
+        if logger:
+            logger.phase_completed(state.current_phase_index, phase.title,
+                                   tasks_done, phase_duration, phase_cost)
         state.advance_phase()
     else:
         phase.status = PhaseStatus.QA_FAILED
@@ -499,6 +564,9 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
             duration_seconds=phase_duration,
             next_phase_title=next_phase_title,
         )
+        if logger:
+            logger.phase_failed(state.current_phase_index, phase.title,
+                                notes or "QA review did not approve")
         # Advance anyway to avoid infinite loop, but flag it
         state.advance_phase()
 

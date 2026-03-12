@@ -4,9 +4,11 @@ from forge.state import load_state, TaskStatus, PhaseStatus
 from forge import git_utils
 from forge.memory import count_entries
 from forge.cost_tracker import CostTracker
+from forge.build_logger import read_log
 
 
-def run_status(project_dir: Path, show_cost: bool = False):
+def run_status(project_dir: Path, show_cost: bool = False,
+               show_log: bool = False, log_tail: int = 20):
     state = load_state(project_dir)
 
     if not state.initialized:
@@ -56,4 +58,58 @@ def run_status(project_dir: Path, show_cost: bool = False):
         tracker.load_from_log()
         print(tracker.format_cost_report(state))
 
+    # Build log (after cost report, before final newline)
+    if show_log:
+        records = read_log(project_dir, limit=log_tail)
+        if not records:
+            print("\n  No build log yet. Run `forge run` to generate events.")
+        else:
+            print(f"\n  Recent Build Events (last {log_tail})")
+            print("  " + "\u2500" * 58)
+            for r in records:
+                ts = r.get("ts", "")
+                # Extract HH:MM:SS from ISO timestamp
+                time_part = ts[11:19] if len(ts) >= 19 else ts[:8]
+                event = r.get("event", "unknown")
+                detail = _format_log_detail(event, r)
+                print(f"  {time_part}  {event:<20s} {detail}")
+
     print()
+
+
+def _format_log_detail(event: str, record: dict) -> str:
+    """Format event-specific detail for the log table."""
+    if event == "session_started":
+        return f"Project: {record.get('project_name', '?')}  Phases: {record.get('phase_count', '?')}"
+    if event == "session_ended":
+        return f"Tasks: {record.get('tasks_completed', 0)}  Cost: ${record.get('total_cost', 0):.2f}"
+    if event == "phase_started":
+        return f"Phase {(record.get('phase', 0) or 0) + 1}: {record.get('phase_title', '')}"
+    if event == "phase_completed":
+        return f"{record.get('phase_title', '')}  {record.get('task_count', 0)} tasks"
+    if event == "phase_failed":
+        return record.get("phase_title", "")
+    if event == "task_started":
+        return record.get("task_title", "")
+    if event == "task_completed":
+        dur = int(record.get("duration_secs", 0))
+        cost = record.get("cost", 0)
+        t_in = record.get("tokens_in", 0)
+        t_out = record.get("tokens_out", 0)
+        return f"{dur}s  ${cost:.3f}  {t_in:,}/{t_out:,} tokens"
+    if event == "task_failed":
+        return f"{record.get('task_title', '')} (retry {record.get('retry_count', 0)})"
+    if event == "task_parked":
+        return record.get("task_title", "")
+    if event in ("qa_passed", "qa_failed"):
+        return record.get("task_title", "")
+    if event == "git_committed":
+        h = record.get("commit_hash", "")[:7]
+        return f"{h}: {record.get('message_preview', '')}"
+    if event == "rate_limit_hit":
+        return f"Waiting {record.get('wait_secs', 0)}s (attempt {record.get('attempt', 0)})"
+    if event == "fatal_error":
+        return f"{record.get('error_type', '')}: {record.get('message', '')[:60]}"
+    if event == "memory_recorded":
+        return f"{record.get('memory_type', '')}: {record.get('title', '')}"
+    return ""

@@ -100,14 +100,24 @@ def extract_error_prefix(stderr: str) -> str:
     return "UNKNOWN"
 
 
-def wait_with_countdown(seconds: int, message: str) -> None:
+def wait_with_countdown(seconds: int, message: str,
+                        logger=None, attempt: int = 1) -> None:
     """
     Wait for `seconds` with a live countdown printed to terminal.
 
     Updates the same line each second using carriage return.
     Falls back to a single line print if not a tty.
     Catches KeyboardInterrupt and re-raises it so Ctrl+C still works.
+
+    If logger is provided and message contains "rate" (case-insensitive),
+    logs a rate_limit_hit event.
     """
+    if logger and "rate" in message.lower():
+        try:
+            logger.rate_limit_hit(seconds, attempt)
+        except Exception:
+            pass
+
     if not sys.stdout.isatty():
         print(f"  {_SYM_WARN}  {message} - {seconds}s remaining...")
         time.sleep(seconds)
