@@ -465,11 +465,29 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
                 truncatable=True,
             ))
 
+    AUTH_SIGNALS = [
+        "auth", "authentication", "authorization", "login", "logout",
+        "signup", "register", "password", "session", "token", "jwt",
+        "oauth", "permission", "role", "rbac", "middleware",
+        "supabase auth", "nextauth", "clerk", "csrf", "cookie",
+    ]
+
+    if any(sig in task_text for sig in AUTH_SIGNALS):
+        auth_skill_path = skills_dir / "auth.md"
+        if auth_skill_path.exists():
+            auth_skill = auth_skill_path.read_text()
+            budget.add(ContentBlock(
+                name="auth_skill",
+                content=auth_skill,
+                priority=7,
+                truncatable=True,
+            ))
+
     allocated = budget.allocate()
 
     # Collect injected skill content
     skill_parts = []
-    for key in ("frontend_skill", "database_skill"):
+    for key in ("frontend_skill", "database_skill", "auth_skill"):
         content = allocated.get(key, "")
         if content:
             skill_parts.append(content)
