@@ -722,6 +722,78 @@ def _offer_figma_setup(project_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Optional Linear integration setup
+# ---------------------------------------------------------------------------
+
+def _offer_linear_setup(project_dir: Path) -> None:
+    """
+    Offer optional Linear integration setup at end of interview.
+
+    If the user enters a team ID, writes .forge/linear.json.
+    Prompts for Linear token and saves to ~/.forge/profile.yaml.
+    """
+    from forge.linear_integration import LinearConfig, save_linear_config, get_linear_token
+
+    print("\n  Would you like to connect Linear for issue tracking integration?")
+    print("  Forge will read open issues and update status as tasks complete.")
+    print("  Enter your Linear team ID, or press Enter to skip:")
+
+    try:
+        answer = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if not answer:
+        return
+
+    team_id = answer
+
+    # Optionally ask for project ID
+    print("  Enter your Linear project ID (or press Enter to skip):")
+    try:
+        project_id = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        project_id = ""
+
+    config = LinearConfig(
+        enabled=True,
+        team_id=team_id,
+        project_id=project_id,
+    )
+    save_linear_config(project_dir, config)
+    print(f"  {SYM_OK} Wrote .forge/linear.json for team {team_id}")
+
+    # Check for existing token
+    existing_token = get_linear_token()
+    if existing_token:
+        print(f"  {SYM_OK} Linear token already set in profile")
+        print()
+        return
+
+    print("\n  Enter your Linear API key (or press Enter to skip):")
+    print("  (Create one at linear.app/settings/api)")
+
+    try:
+        token = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if token:
+        from forge.profile import load_profile, save_profile
+        profile = load_profile()
+        profile["linear_token"] = token
+        save_profile(profile)
+        print(f"  {SYM_OK} Linear token saved to ~/.forge/profile.yaml")
+    else:
+        print(f"  {SYM_WARN} No token set - add linear_token to ~/.forge/profile.yaml later")
+
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -799,6 +871,9 @@ def run_new(project_dir: Path, description: Optional[str] = None) -> None:
 
     # Optional Figma integration setup
     _offer_figma_setup(project_dir)
+
+    # Optional Linear integration setup
+    _offer_linear_setup(project_dir)
 
     # Create .forge dir
     forge_dir = project_dir / ".forge"

@@ -539,6 +539,53 @@ def _check_figma_config(project_dir: Path) -> CheckResult | None:
 
 
 # ---------------------------------------------------------------------------
+# Linear config check
+# ---------------------------------------------------------------------------
+
+def _check_linear_config(project_dir: Path) -> CheckResult | None:
+    """
+    Check .forge/linear.json if present.
+
+    Returns None if not configured (optional).
+    WARN if enabled but token missing or team_id empty.
+    PASS if config valid.
+    """
+    linear_path = project_dir / ".forge" / "linear.json"
+    if not linear_path.exists():
+        return None
+
+    from forge.linear_integration import load_linear_config, get_linear_token
+
+    config = load_linear_config(project_dir)
+    if not config.enabled:
+        return CheckResult(
+            "Linear Integration", CheckStatus.WARN,
+            "linear.json exists but integration is disabled",
+            'Set "enabled": true in .forge/linear.json to activate'
+        )
+
+    issues = []
+    if not config.team_id:
+        issues.append("team_id not set")
+
+    token = get_linear_token()
+    if not token:
+        issues.append("linear_token missing from ~/.forge/profile.yaml")
+
+    if issues:
+        return CheckResult(
+            "Linear Integration", CheckStatus.WARN,
+            f"linear.json: {'; '.join(issues)}",
+            "Add linear_token to ~/.forge/profile.yaml and set team_id in .forge/linear.json"
+        )
+
+    return CheckResult(
+        "Linear Integration", CheckStatus.PASS,
+        f"team {config.team_id} (token set)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # CI workflow check
 # ---------------------------------------------------------------------------
 
@@ -716,6 +763,11 @@ def run_doctor(project_dir: Path) -> None:
     figma_result = _check_figma_config(project_dir)
     if figma_result is not None:
         results.append(figma_result)
+
+    # Linear config check (optional - only when .forge/linear.json exists)
+    linear_result = _check_linear_config(project_dir)
+    if linear_result is not None:
+        results.append(linear_result)
 
     # CI workflow check (optional - only when ci.yml exists)
     ci_result = _check_github_workflow(project_dir)

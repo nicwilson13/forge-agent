@@ -31,6 +31,10 @@ from forge.github_integration import (
 )
 from forge.vercel_integration import run_vercel_check, format_vercel_status
 from forge.figma_integration import run_figma_integration
+from forge.linear_integration import (
+    load_linear_config, get_linear_token, run_linear_integration,
+    match_issue_to_task, update_issue_status, create_issue as linear_create_issue,
+)
 
 # Module-level state for signal handler (must not be closures)
 _current_task: Task | None = None
@@ -145,6 +149,11 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
     # Run Figma integration at build start
     figma_context, figma_components = run_figma_integration(project_dir)
 
+    # Run Linear integration at build start
+    linear_context, linear_issues = run_linear_integration(project_dir)
+    lin_config = load_linear_config(project_dir)
+    lin_token = get_linear_token() if lin_config.enabled else ""
+
     display.print_forge_header(project_dir.name)
     log_mcp_status(mcp_config)
     if dry_run:
@@ -216,7 +225,8 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
                 tasks, _ = orchestrator.generate_tasks(project_dir, phase, state,
                                                        mcp_config=mcp_config,
                                                        github_issues_context=issues_context,
-                                                       figma_context=figma_context)
+                                                       figma_context=figma_context,
+                                                       linear_context=linear_context)
             except FatalAPIError as e:
                 _handle_fatal_error(project_dir, state, None, e, logger)
             except RetryExhaustedError as e:
@@ -284,7 +294,9 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
         # Execute the task (sequential)
         await _execute_task(project_dir, state, phase, task, loop_guard,
                             max_retries, dry_run, tracker, logger,
-                            mcp_config=mcp_config)
+                            mcp_config=mcp_config,
+                            lin_config=lin_config, lin_token=lin_token,
+                            linear_issues=linear_issues)
         checkpoint.atomic_save(project_dir, state)
 
     build_duration = time.time() - build_start_time
@@ -357,7 +369,9 @@ async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
                         tracker: CostTracker | None = None,
                         logger: BuildLogger | None = None,
                         locks: ParallelLocks | None = None,
-                        mcp_config=None):
+                        mcp_config=None,
+                        lin_config=None, lin_token: str = "",
+                        linear_issues: list | None = None):
     task_index = phase.tasks.index(task)
     total_tasks = len(phase.tasks)
 
@@ -639,6 +653,15 @@ async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
             print("  [forge] Checkpoint saved: task done, commit pending.")
             print("  Run `forge run` to retry the commit.")
 
+        # Update Linear issue status on task completion
+        if lin_config and lin_config.enabled and lin_token and lin_config.update_issue_status:
+            matched = match_issue_to_task(
+                linear_issues or [], task.title, task.description
+            )
+            if matched:
+                update_issue_status(lin_config, lin_token, matched["id"], "done")
+                print(f"  [linear] {matched['identifier']} marked Done")
+
     else:
         if logger:
             logger.qa_failed(state.current_phase_index, task.id,
@@ -658,6 +681,20 @@ async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
             if logger:
                 logger.task_parked(state.current_phase_index, task.id,
                                    task.title, reason)
+            # Create Linear issue for parked task
+            if lin_config and lin_config.enabled and lin_token and lin_config.create_issues_for_parked:
+                lin_issue = linear_create_issue(
+                    lin_config, lin_token,
+                    title=f"NEEDS_HUMAN: {task.title}",
+                    description=(
+                        f"Forge parked this task and needs human input.\n\n"
+                        f"**Task:** {task.title}\n"
+                        f"**Reason:** {reason}\n\n"
+                        f"Resolve in `NEEDS_HUMAN.md` then run `forge checkin`."
+                    ),
+                )
+                if lin_issue:
+                    print(f"  [linear] Created {lin_issue['identifier']} for parked task")
         else:
             display.print_task_failure(
                 retry_count=task.retry_count,
@@ -709,7 +746,9 @@ async def _run_phase_parallel(
                 project_dir, state, phase, task,
                 loop_guard, max_retries, dry_run,
                 tracker, logger, locks=locks,
-                mcp_config=mcp_config
+                mcp_config=mcp_config,
+                lin_config=lin_config, lin_token=lin_token,
+                linear_issues=linear_issues
             )
             success = task.status == TaskStatus.DONE
             return TaskResult(task.id, success, time.time() - start)
