@@ -109,7 +109,12 @@ def main():
     )
 
     # forge status
-    subparsers.add_parser("status", help="Print current build state")
+    status_p = subparsers.add_parser("status", help="Print current build state")
+    status_p.add_argument(
+        "--cost",
+        action="store_true",
+        help="Show cost report from .forge/cost_log.jsonl",
+    )
 
     # forge checkin
     subparsers.add_parser("checkin", help="Interactively resolve NEEDS_HUMAN items")
@@ -150,7 +155,7 @@ def main():
 
     elif args.command == "status":
         from forge.commands.status import run_status
-        run_status(project_dir)
+        run_status(project_dir, show_cost=args.cost)
 
     elif args.command == "checkin":
         from forge.commands.checkin import run_checkin

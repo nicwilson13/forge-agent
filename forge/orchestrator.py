@@ -16,6 +16,7 @@ from typing import List, Tuple
 import anthropic
 
 from forge.context_budget import ContextBudget, ContentBlock, DEFAULT_BUDGET, estimate_tokens
+from forge.cost_tracker import TokenUsage, MODEL_OPUS
 from forge.memory import load_memory_context, ensure_memory_dir
 from forge.retry import (
     FatalAPIError,
@@ -70,7 +71,7 @@ def _classify_anthropic_error(exc: Exception) -> tuple[str, bool, str]:
     return ("UNKNOWN", False, "")
 
 
-def _chat(system: str, user: str, max_tokens: int = 4096) -> str:
+def _chat(system: str, user: str, max_tokens: int = 4096) -> tuple[str, TokenUsage]:
     last_error_str = ""
     last_prefix = "UNKNOWN"
 
@@ -82,7 +83,12 @@ def _chat(system: str, user: str, max_tokens: int = 4096) -> str:
                 system=system,
                 messages=[{"role": "user", "content": user}],
             )
-            return resp.content[0].text.strip()
+            usage = TokenUsage(
+                input_tokens=resp.usage.input_tokens,
+                output_tokens=resp.usage.output_tokens,
+                model=MODEL_OPUS,
+            )
+            return resp.content[0].text.strip(), usage
         except (
             anthropic.AuthenticationError,
             anthropic.RateLimitError,
@@ -115,16 +121,16 @@ def _chat(system: str, user: str, max_tokens: int = 4096) -> str:
     )
 
 
-def _json_chat(system: str, user: str, max_tokens: int = 4096) -> dict | list:
-    """Call API and parse JSON from the response."""
+def _json_chat(system: str, user: str, max_tokens: int = 4096) -> tuple[dict | list, TokenUsage]:
+    """Call API and parse JSON from the response. Returns (parsed_json, usage)."""
     system_with_json = system + "\n\nYou MUST respond with valid JSON only. No prose, no markdown fences."
-    raw = _chat(system_with_json, user, max_tokens)
+    raw, usage = _chat(system_with_json, user, max_tokens)
     # Strip accidental markdown fences
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1]
         raw = raw.rsplit("```", 1)[0]
-    return json.loads(raw)
+    return json.loads(raw), usage
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +160,7 @@ Return a JSON array of phase objects:
 """
 
 
-def generate_phases(project_dir: Path) -> List[Phase]:
+def generate_phases(project_dir: Path) -> Tuple[List[Phase], TokenUsage]:
     vision = _read_doc(project_dir, "VISION.md")
     requirements = _read_doc(project_dir, "REQUIREMENTS.md")
     claude_md = _read_doc(project_dir, "CLAUDE.md")
@@ -169,8 +175,8 @@ REQUIREMENTS.md:
 CLAUDE.md (constraints + preferences):
 {claude_md}
 """
-    raw_phases = _json_chat(PHASE_SYSTEM, user)
-    return [Phase.new(p["title"], p["description"]) for p in raw_phases]
+    raw_phases, usage = _json_chat(PHASE_SYSTEM, user)
+    return [Phase.new(p["title"], p["description"]) for p in raw_phases], usage
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +208,7 @@ Return a JSON array:
 """
 
 
-def generate_tasks(project_dir: Path, phase: Phase, state: ForgeState) -> List[Task]:
+def generate_tasks(project_dir: Path, phase: Phase, state: ForgeState) -> Tuple[List[Task], TokenUsage]:
     vision = _read_doc(project_dir, "VISION.md")
     arch = _read_doc(project_dir, "ARCHITECTURE.md")
     claude_md = _read_doc(project_dir, "CLAUDE.md")
@@ -231,7 +237,7 @@ Now generate tasks for this phase:
 Title: {phase.title}
 Description: {phase.description}
 """
-    raw_tasks = _json_chat(TASK_SYSTEM, user)
+    raw_tasks, usage = _json_chat(TASK_SYSTEM, user)
     tasks = []
     for t in raw_tasks:
         desc = t["description"]
@@ -240,7 +246,7 @@ Description: {phase.description}
         if t.get("needs_human") or desc.strip().upper().startswith("NEEDS_HUMAN"):
             task.park_reason = desc.split("\n")[0].replace("NEEDS_HUMAN:", "").strip()
         tasks.append(task)
-    return tasks
+    return tasks, usage
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +268,7 @@ Keep it focused and scannable. Max 600 words.
 """
 
 
-def write_architecture(project_dir: Path, phases: List[Phase]):
+def write_architecture(project_dir: Path, phases: List[Phase]) -> TokenUsage:
     vision = _read_doc(project_dir, "VISION.md")
     requirements = _read_doc(project_dir, "REQUIREMENTS.md")
     claude_md = _read_doc(project_dir, "CLAUDE.md")
@@ -281,10 +287,11 @@ CLAUDE.md:
 Planned phases:
 {phases_summary}
 """
-    arch_content = _chat(ARCH_SYSTEM, user)
+    arch_content, usage = _chat(ARCH_SYSTEM, user)
     arch_path = project_dir / "ARCHITECTURE.md"
     arch_path.write_text(arch_content)
     print(f"  [forge] Wrote ARCHITECTURE.md")
+    return usage
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +398,7 @@ Return JSON:
 """
 
 
-def evaluate_qa(task: Task, test_output: str, error_output: str) -> Tuple[bool, str, str]:
+def evaluate_qa(task: Task, test_output: str, error_output: str) -> Tuple[bool, str, str, TokenUsage]:
     user = f"""
 Task: {task.title}
 Description: {task.description}
@@ -402,11 +409,11 @@ Test output:
 Errors:
 {error_output[-2000:] if error_output else 'None'}
 """
-    result = _json_chat(QA_EVAL_SYSTEM, user)
+    result, usage = _json_chat(QA_EVAL_SYSTEM, user)
     passed = result.get("passed", False)
     summary = result.get("summary", "")
     retry_prompt = result.get("retry_prompt") or ""
-    return passed, summary, retry_prompt
+    return passed, summary, retry_prompt, usage
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +436,7 @@ Return JSON:
 """
 
 
-def evaluate_phase(project_dir: Path, phase: Phase) -> Tuple[bool, str]:
+def evaluate_phase(project_dir: Path, phase: Phase) -> Tuple[bool, str, TokenUsage]:
     done_tasks = [t for t in phase.tasks if t.status == "done"]
     task_summary = "\n".join(f"- {t.title}: {t.notes or 'completed'}" for t in done_tasks)
     arch = _read_doc(project_dir, "ARCHITECTURE.md")
@@ -451,12 +458,12 @@ Completed tasks:
 Architecture:
 {allocated["arch"]}
 """
-    result = _json_chat(PHASE_QA_SYSTEM, user)
+    result, usage = _json_chat(PHASE_QA_SYSTEM, user)
     approved = result.get("approved", False)
     notes = result.get("notes", "")
     if result.get("blocking_issues"):
         notes += "\nBlocking issues:\n" + "\n".join(f"- {i}" for i in result["blocking_issues"])
-    return approved, notes
+    return approved, notes, usage
 
 
 # ---------------------------------------------------------------------------

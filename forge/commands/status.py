@@ -3,9 +3,10 @@ from pathlib import Path
 from forge.state import load_state, TaskStatus, PhaseStatus
 from forge import git_utils
 from forge.memory import count_entries
+from forge.cost_tracker import CostTracker
 
 
-def run_status(project_dir: Path):
+def run_status(project_dir: Path, show_cost: bool = False):
     state = load_state(project_dir)
 
     if not state.initialized:
@@ -48,5 +49,11 @@ def run_status(project_dir: Path):
             print(f"\n  Recent commits:")
             for c in commits[:3]:
                 print(f"    {c}")
+
+    # Cost report
+    if show_cost:
+        tracker = CostTracker(project_dir)
+        tracker.load_from_log()
+        print(tracker.format_cost_report(state))
 
     print()
