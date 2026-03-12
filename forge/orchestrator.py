@@ -15,9 +15,17 @@ from typing import List, Tuple
 
 import anthropic
 
+from forge.retry import (
+    FatalAPIError,
+    RetryExhaustedError,
+    BACKOFF_SCHEDULE,
+    wait_with_countdown,
+)
 from forge.state import Phase, Task, ForgeState
 
 _CLIENT = None
+
+MAX_RETRIES = 5   # max retry attempts for any single API call
 
 
 def _client() -> anthropic.Anthropic:
@@ -27,14 +35,81 @@ def _client() -> anthropic.Anthropic:
     return _CLIENT
 
 
+def _classify_anthropic_error(exc: Exception) -> tuple[str, bool, str]:
+    """
+    Map an Anthropic SDK exception to (error_prefix, is_fatal, fix_instruction).
+
+    Centralises all exception-to-prefix mapping in one place.
+    """
+    if isinstance(exc, anthropic.AuthenticationError):
+        return (
+            "AUTH_ERROR",
+            True,
+            "Check your key at console.anthropic.com/settings/keys\n"
+            "       export ANTHROPIC_API_KEY=sk-ant-your-new-key",
+        )
+    if isinstance(exc, anthropic.RateLimitError):
+        return ("RATE_LIMIT", False, "")
+    if isinstance(exc, anthropic.APIConnectionError):
+        return ("CONNECTION_ERROR", False, "")
+    if isinstance(exc, anthropic.APITimeoutError):
+        return ("TIMEOUT", False, "")
+    if isinstance(exc, anthropic.APIStatusError):
+        code = getattr(exc, "status_code", 0)
+        if code == 529 or code >= 500:
+            return ("CONNECTION_ERROR", False, "")
+        # 4xx client errors (other than auth/rate limit already caught)
+        return (
+            "AUTH_ERROR",
+            True,
+            f"API returned client error {code}. Check your request configuration.",
+        )
+    return ("UNKNOWN", False, "")
+
+
 def _chat(system: str, user: str, max_tokens: int = 4096) -> str:
-    resp = _client().messages.create(
-        model="claude-opus-4-5",
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": user}],
+    last_error_str = ""
+    last_prefix = "UNKNOWN"
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = _client().messages.create(
+                model="claude-opus-4-5",
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            )
+            return resp.content[0].text.strip()
+        except (
+            anthropic.AuthenticationError,
+            anthropic.RateLimitError,
+            anthropic.APIConnectionError,
+            anthropic.APITimeoutError,
+            anthropic.APIStatusError,
+        ) as e:
+            prefix, is_fatal, fix_instruction = _classify_anthropic_error(e)
+            last_prefix = prefix
+            last_error_str = str(e)
+
+            if is_fatal:
+                raise FatalAPIError(
+                    error_prefix=prefix,
+                    message=last_error_str,
+                    fix_instruction=fix_instruction,
+                )
+
+            if attempt < MAX_RETRIES - 1:
+                backoff = BACKOFF_SCHEDULE[min(attempt, len(BACKOFF_SCHEDULE) - 1)]
+                wait_with_countdown(
+                    backoff,
+                    f"Retry {attempt + 1}/{MAX_RETRIES}",
+                )
+
+    raise RetryExhaustedError(
+        error_prefix=last_prefix,
+        attempts=MAX_RETRIES,
+        last_error=last_error_str,
     )
-    return resp.content[0].text.strip()
 
 
 def _json_chat(system: str, user: str, max_tokens: int = 4096) -> dict | list:

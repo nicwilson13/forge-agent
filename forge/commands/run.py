@@ -9,6 +9,7 @@ from pathlib import Path
 
 from forge import orchestrator, builder, git_utils, needs_human, display, checkpoint
 from forge.loop_guard import LoopGuard
+from forge.retry import FatalAPIError, RetryExhaustedError, extract_error_prefix, is_fatal_error
 from forge.state import (
     ForgeState, Phase, Task, TaskStatus, PhaseStatus,
     load_state,
@@ -57,6 +58,37 @@ def _clear_interrupt_handler() -> None:
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
 
+def _handle_fatal_error(project_dir: Path, state: ForgeState,
+                        task: Task | None, error: FatalAPIError) -> None:
+    """Handle a non-retryable error - save state and exit."""
+    if task is not None:
+        task.status = TaskStatus.INTERRUPTED
+        task.interrupt_reason = error.error_prefix
+    checkpoint.atomic_save(project_dir, state)
+
+    print(f"\n  {display.SYM_FAIL} Authentication failed. Forge cannot continue.\n")
+    print(f"  {error}")
+    if error.fix_instruction:
+        print(f"  Fix: {error.fix_instruction}")
+    print(f"\n  State saved. Run `forge run` after fixing the issue.")
+    sys.exit(1)
+
+
+def _handle_retry_exhausted(project_dir: Path, state: ForgeState,
+                            task: Task | None,
+                            error: RetryExhaustedError) -> None:
+    """Handle exhausted retries - save state and exit cleanly."""
+    if task is not None:
+        task.status = TaskStatus.INTERRUPTED
+        task.interrupt_reason = "retry_exhausted"
+    checkpoint.atomic_save(project_dir, state)
+
+    print(f"\n  {display.SYM_FAIL} API unavailable after {error.attempts} attempts. Build paused.\n")
+    print(f"  State saved to .forge/state.json")
+    print(f"  Run `forge run` when the API is available to resume.")
+    sys.exit(0)
+
+
 def run_forge(project_dir: Path, checkin_every: int = 10,
               max_retries: int = 3, dry_run: bool = False):
     _validate_project(project_dir)
@@ -88,7 +120,12 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
     # -----------------------------------------------------------------------
     if not state.initialized:
         print("\n[forge] First run - setting up project...\n")
-        _initial_setup(project_dir, state, dry_run)
+        try:
+            _initial_setup(project_dir, state, dry_run)
+        except FatalAPIError as e:
+            _handle_fatal_error(project_dir, state, None, e)
+        except RetryExhaustedError as e:
+            _handle_retry_exhausted(project_dir, state, None, e)
         checkpoint.atomic_save(project_dir, state)
         if dry_run:
             display.print_dry_run_plan(state.phases)
@@ -112,7 +149,12 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
             phase_start_time = time.time()
 
             print(f"\n[forge] Planning tasks for: {phase.title}")
-            tasks = orchestrator.generate_tasks(project_dir, phase, state)
+            try:
+                tasks = orchestrator.generate_tasks(project_dir, phase, state)
+            except FatalAPIError as e:
+                _handle_fatal_error(project_dir, state, None, e)
+            except RetryExhaustedError as e:
+                _handle_retry_exhausted(project_dir, state, None, e)
             phase.tasks = tasks
             phase.status = PhaseStatus.IN_PROGRESS
             checkpoint.atomic_save(project_dir, state)
@@ -255,17 +297,50 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
     prompt = orchestrator.build_task_prompt(project_dir, phase, task)
 
     # Call Claude Code
-    success, stdout, stderr, duration = builder.run_task(project_dir, prompt)
+    try:
+        success, stdout, stderr, duration = builder.run_task(project_dir, prompt)
+    except FatalAPIError as e:
+        _clear_interrupt_handler()
+        _handle_fatal_error(project_dir, state, task, e)
+        return
+    except RetryExhaustedError as e:
+        _clear_interrupt_handler()
+        _handle_retry_exhausted(project_dir, state, task, e)
+        return
 
     _clear_interrupt_handler()
+
+    # Check for fatal errors in builder stderr
+    if not success:
+        prefix = extract_error_prefix(stderr)
+        if is_fatal_error(prefix):
+            _handle_fatal_error(
+                project_dir, state, task,
+                FatalAPIError(
+                    error_prefix=prefix,
+                    message=stderr,
+                    fix_instruction=(
+                        "Check your key at console.anthropic.com/settings/keys\n"
+                        "       export ANTHROPIC_API_KEY=sk-ant-your-new-key"
+                    ),
+                ),
+            )
+            return
 
     # Run tests
     tests_passed, test_out, test_err = builder.run_tests(project_dir)
 
     # QA evaluation via orchestrator
-    qa_passed, qa_summary, retry_prompt = orchestrator.evaluate_qa(
-        task, test_out, stderr + test_err
-    )
+    try:
+        qa_passed, qa_summary, retry_prompt = orchestrator.evaluate_qa(
+            task, test_out, stderr + test_err
+        )
+    except FatalAPIError as e:
+        _handle_fatal_error(project_dir, state, task, e)
+        return
+    except RetryExhaustedError as e:
+        _handle_retry_exhausted(project_dir, state, task, e)
+        return
 
     if qa_passed:
         task.status = TaskStatus.DONE
@@ -326,7 +401,12 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
                     loop_guard: LoopGuard, phase_start_time: float):
     print(f"\n[forge] Running phase QA review...")
 
-    approved, notes = orchestrator.evaluate_phase(project_dir, phase)
+    try:
+        approved, notes = orchestrator.evaluate_phase(project_dir, phase)
+    except FatalAPIError as e:
+        _handle_fatal_error(project_dir, state, None, e)
+    except RetryExhaustedError as e:
+        _handle_retry_exhausted(project_dir, state, None, e)
     phase.qa_notes = notes
     phase.completed_at = _now()
 
