@@ -65,6 +65,8 @@ class Phase:
     qa_notes: str = ""
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     completed_at: Optional[str] = None
+    github_milestone: Optional[int] = None
+    github_pr: Optional[int] = None
 
     @staticmethod
     def new(title: str, description: str) -> "Phase":

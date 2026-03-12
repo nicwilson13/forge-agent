@@ -23,6 +23,12 @@ from forge.state import (
     ForgeState, Phase, Task, TaskStatus, PhaseStatus,
     load_state,
 )
+from forge.github_integration import (
+    load_github_config, get_github_token, get_open_issues,
+    create_milestone, close_milestone, create_phase_pr,
+    post_build_summary as gh_post_build_summary,
+    format_issue_context,
+)
 
 # Module-level state for signal handler (must not be closures)
 _current_task: Task | None = None
@@ -130,6 +136,10 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
     from forge.mcp_config import load_mcp_config, log_mcp_status
     mcp_config = load_mcp_config(project_dir)
 
+    # Load GitHub integration config
+    gh_config = load_github_config(project_dir)
+    gh_token = get_github_token() if gh_config.enabled else ""
+
     display.print_forge_header(project_dir.name)
     log_mcp_status(mcp_config)
     if dry_run:
@@ -188,9 +198,19 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
             phase_start_time = time.time()
 
             print(f"\n[forge] Planning tasks for: {phase.title}")
+
+            # Fetch GitHub issues for task generation context
+            issues_context = ""
+            if gh_config.enabled and gh_token:
+                issues = get_open_issues(gh_config, gh_token)
+                if issues:
+                    print(f"  [github] {len(issues)} open issue(s) loaded for context")
+                    issues_context = format_issue_context(issues)
+
             try:
                 tasks, _ = orchestrator.generate_tasks(project_dir, phase, state,
-                                                       mcp_config=mcp_config)
+                                                       mcp_config=mcp_config,
+                                                       github_issues_context=issues_context)
             except FatalAPIError as e:
                 _handle_fatal_error(project_dir, state, None, e, logger)
             except RetryExhaustedError as e:
@@ -214,7 +234,8 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
         if task is None:
             # All tasks done or parked - review the phase
             _complete_phase(project_dir, state, phase, loop_guard, phase_start_time, tracker, logger,
-                           mcp_config=mcp_config)
+                           mcp_config=mcp_config,
+                           gh_config=gh_config, gh_token=gh_token)
             checkpoint.atomic_save(project_dir, state)
             phase_start_time = time.time()
             continue
@@ -702,7 +723,8 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
                     loop_guard: LoopGuard, phase_start_time: float,
                     tracker: CostTracker | None = None,
                     logger: BuildLogger | None = None,
-                    mcp_config=None):
+                    mcp_config=None,
+                    gh_config=None, gh_token: str = ""):
     # Run E2E tests before phase QA evaluation
     from forge.e2e_generator import (
         should_generate_e2e, generate_e2e_tests,
@@ -835,6 +857,14 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
         if logger:
             logger.phase_completed(state.current_phase_index, phase.title,
                                    tasks_done, phase_duration, phase_cost)
+
+        # GitHub integration at phase completion
+        if gh_config and gh_config.enabled and gh_token:
+            _github_phase_complete(
+                project_dir, state, phase, phase_index,
+                gh_config, gh_token, tracker, logger,
+            )
+
         state.advance_phase()
     else:
         phase.status = PhaseStatus.QA_FAILED
@@ -907,6 +937,86 @@ def _inject_security_fix_task(state: ForgeState, phase: Phase,
             break
 
     phase.tasks.insert(insert_idx, new_task)
+
+
+# ---------------------------------------------------------------------------
+# GitHub integration helpers
+# ---------------------------------------------------------------------------
+
+def _get_current_branch(project_dir: Path) -> str:
+    """Run git rev-parse --abbrev-ref HEAD, return branch name."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(project_dir), capture_output=True, text=True,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _github_phase_complete(
+    project_dir: Path,
+    state: ForgeState,
+    phase: Phase,
+    phase_index: int,
+    gh_config,
+    gh_token: str,
+    tracker: CostTracker | None,
+    logger: BuildLogger | None,
+) -> None:
+    """Run GitHub integration steps after a phase completes successfully."""
+    phase_num = phase_index + 1
+    milestone_num = None
+
+    if gh_config.create_milestones:
+        print(f"  [github] Creating milestone for Phase {phase_num}...")
+        milestone_num = create_milestone(
+            gh_config, gh_token, phase.title, phase_num
+        )
+        if milestone_num:
+            phase.github_milestone = milestone_num
+            print(f"  [github] Milestone #{milestone_num} created")
+
+    if gh_config.create_prs:
+        current_branch = _get_current_branch(project_dir)
+        if current_branch and current_branch != gh_config.pr_base_branch:
+            print(f"  [github] Opening PR from {current_branch}...")
+            pr = create_phase_pr(
+                gh_config, gh_token, phase, phase_num,
+                current_branch, milestone_num
+            )
+            if pr:
+                phase.github_pr = pr["number"]
+                pr_url = pr.get("html_url", "")
+                print(f"  [github] PR #{pr['number']} created")
+                if pr_url:
+                    print(f"  PR: {pr_url}")
+                if logger:
+                    logger.log("github_pr_created", phase=phase_index,
+                               pr_number=pr["number"])
+
+                if gh_config.post_build_summary:
+                    health_summary = ""
+                    cost_summary = ""
+                    if tracker:
+                        from forge.cost_tracker import _format_cost
+                        cost_summary = _format_cost(tracker.session_total_cost())
+                    gh_post_build_summary(
+                        gh_config, gh_token, pr["number"],
+                        phase, health_summary, cost_summary
+                    )
+                    print(f"  [github] Build summary posted to PR #{pr['number']}")
+        else:
+            if not current_branch:
+                print("  [github] Could not determine current branch - skipping PR")
+            else:
+                print(f"  [github] Branch is {gh_config.pr_base_branch} - skipping PR")
+
+    if milestone_num and gh_config.create_milestones:
+        close_milestone(gh_config, gh_token, milestone_num)
+        print(f"  [github] Milestone #{milestone_num} closed")
 
 
 # ---------------------------------------------------------------------------

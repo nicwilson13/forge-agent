@@ -398,6 +398,53 @@ def _check_mcp_config(project_dir: Path) -> CheckResult | None:
 
 
 # ---------------------------------------------------------------------------
+# GitHub config check
+# ---------------------------------------------------------------------------
+
+def _check_github_config(project_dir: Path) -> CheckResult | None:
+    """
+    Check .forge/github.json if present.
+
+    Returns None if not configured (optional).
+    Checks: enabled, owner/repo set, token available in profile.
+    WARN if config present but token missing.
+    """
+    gh_path = project_dir / ".forge" / "github.json"
+    if not gh_path.exists():
+        return None
+
+    from forge.github_integration import load_github_config, get_github_token
+
+    config = load_github_config(project_dir)
+    if not config.enabled:
+        return CheckResult(
+            "GitHub Integration", CheckStatus.WARN,
+            "github.json exists but integration is disabled",
+            'Set "enabled": true in .forge/github.json to activate'
+        )
+
+    issues = []
+    if not config.owner or not config.repo:
+        issues.append("owner or repo not set")
+
+    token = get_github_token()
+    if not token:
+        issues.append("github_token missing from ~/.forge/profile.yaml")
+
+    if issues:
+        return CheckResult(
+            "GitHub Integration", CheckStatus.WARN,
+            f"github.json: {'; '.join(issues)}",
+            "Add github_token to ~/.forge/profile.yaml and set owner/repo in .forge/github.json"
+        )
+
+    return CheckResult(
+        "GitHub Integration", CheckStatus.PASS,
+        f"{config.owner}/{config.repo} (token set)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Report printer
 # ---------------------------------------------------------------------------
 
@@ -521,6 +568,11 @@ def run_doctor(project_dir: Path) -> None:
     mcp_result = _check_mcp_config(project_dir)
     if mcp_result is not None:
         results.append(mcp_result)
+
+    # GitHub config check (optional - only when .forge/github.json exists)
+    gh_result = _check_github_config(project_dir)
+    if gh_result is not None:
+        results.append(gh_result)
 
     _print_report(results)
 

@@ -482,6 +482,76 @@ def _offer_mcp_setup(project_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Optional GitHub integration setup
+# ---------------------------------------------------------------------------
+
+def _offer_github_setup(project_dir: Path) -> None:
+    """
+    Offer optional GitHub integration setup at end of interview.
+
+    If the user enters owner/repo, writes a starter .forge/github.json.
+    Prompts for GitHub token and saves to ~/.forge/profile.yaml.
+    """
+    from forge.github_integration import GitHubConfig, save_github_config
+
+    print("\n  Would you like to enable GitHub integration?")
+    print("  Forge can create PRs, milestones, and build summaries automatically.")
+    print("  Enter your GitHub repo (e.g. owner/repo), or press Enter to skip:")
+
+    try:
+        answer = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if not answer or "/" not in answer:
+        return
+
+    parts = answer.split("/", 1)
+    owner = parts[0].strip()
+    repo = parts[1].strip()
+
+    if not owner or not repo:
+        print(f"  {SYM_WARN} Invalid format - expected owner/repo")
+        return
+
+    config = GitHubConfig(
+        enabled=True,
+        owner=owner,
+        repo=repo,
+    )
+    save_github_config(project_dir, config)
+    print(f"  {SYM_OK} Wrote .forge/github.json for {owner}/{repo}")
+
+    # Check for existing token
+    from forge.github_integration import get_github_token
+    existing_token = get_github_token()
+    if existing_token:
+        print(f"  {SYM_OK} GitHub token already set in profile")
+        return
+
+    print("\n  Enter your GitHub personal access token (or press Enter to skip):")
+    print("  (Create one at github.com/settings/tokens with repo scope)")
+
+    try:
+        token = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if token:
+        from forge.profile import load_profile, save_profile
+        profile = load_profile()
+        profile["github_token"] = token
+        save_profile(profile)
+        print(f"  {SYM_OK} GitHub token saved to ~/.forge/profile.yaml")
+    else:
+        print(f"  {SYM_WARN} No token set - add github_token to ~/.forge/profile.yaml later")
+
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -547,6 +617,9 @@ def run_new(project_dir: Path, description: Optional[str] = None) -> None:
 
     # Optional MCP setup
     _offer_mcp_setup(project_dir)
+
+    # Optional GitHub integration setup
+    _offer_github_setup(project_dir)
 
     # Create .forge dir
     forge_dir = project_dir / ".forge"

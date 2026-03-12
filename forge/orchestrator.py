@@ -243,7 +243,8 @@ Rules for depends_on:
 
 
 def generate_tasks(project_dir: Path, phase: Phase, state: ForgeState,
-                   mcp_config=None) -> Tuple[List[Task], TokenUsage]:
+                   mcp_config=None,
+                   github_issues_context: str = "") -> Tuple[List[Task], TokenUsage]:
     model = route_orchestrator("generate_tasks")
     log_route("generate_tasks", model, "moderate complexity")
 
@@ -274,6 +275,8 @@ Completed phases so far:
 Now generate tasks for this phase:
 Title: {phase.title}
 Description: {phase.description}
+
+{github_issues_context}
 """
     mcp_servers = mcp_config.to_api_format("task_generation") if mcp_config else None
     raw_tasks, usage = _json_chat(TASK_SYSTEM, user, model=model,
