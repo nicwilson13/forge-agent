@@ -492,6 +492,53 @@ def _check_vercel_config(project_dir: Path) -> CheckResult | None:
 
 
 # ---------------------------------------------------------------------------
+# Figma config check
+# ---------------------------------------------------------------------------
+
+def _check_figma_config(project_dir: Path) -> CheckResult | None:
+    """
+    Check .forge/figma.json if present.
+
+    Returns None if not configured (optional).
+    WARN if enabled but token missing or file_key empty.
+    PASS if config valid.
+    """
+    figma_path = project_dir / ".forge" / "figma.json"
+    if not figma_path.exists():
+        return None
+
+    from forge.figma_integration import load_figma_config, get_figma_token
+
+    config = load_figma_config(project_dir)
+    if not config.enabled:
+        return CheckResult(
+            "Figma Integration", CheckStatus.WARN,
+            "figma.json exists but integration is disabled",
+            'Set "enabled": true in .forge/figma.json to activate'
+        )
+
+    issues = []
+    if not config.file_key:
+        issues.append("file_key not set")
+
+    token = get_figma_token()
+    if not token:
+        issues.append("figma_token missing from ~/.forge/profile.yaml")
+
+    if issues:
+        return CheckResult(
+            "Figma Integration", CheckStatus.WARN,
+            f"figma.json: {'; '.join(issues)}",
+            "Add figma_token to ~/.forge/profile.yaml and set file_key in .forge/figma.json"
+        )
+
+    return CheckResult(
+        "Figma Integration", CheckStatus.PASS,
+        f"file {config.file_key} (token set)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # CI workflow check
 # ---------------------------------------------------------------------------
 
@@ -664,6 +711,11 @@ def run_doctor(project_dir: Path) -> None:
     vercel_result = _check_vercel_config(project_dir)
     if vercel_result is not None:
         results.append(vercel_result)
+
+    # Figma config check (optional - only when .forge/figma.json exists)
+    figma_result = _check_figma_config(project_dir)
+    if figma_result is not None:
+        results.append(figma_result)
 
     # CI workflow check (optional - only when ci.yml exists)
     ci_result = _check_github_workflow(project_dir)

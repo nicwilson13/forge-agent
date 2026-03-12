@@ -659,6 +659,69 @@ def _offer_vercel_setup(project_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Optional Figma integration setup
+# ---------------------------------------------------------------------------
+
+def _offer_figma_setup(project_dir: Path) -> None:
+    """
+    Offer optional Figma integration setup at end of interview.
+
+    If the user enters a file key, writes .forge/figma.json.
+    Prompts for Figma token and saves to ~/.forge/profile.yaml.
+    """
+    from forge.figma_integration import FigmaConfig, save_figma_config, get_figma_token
+
+    print("\n  Would you like to connect a Figma file for design token extraction?")
+    print("  Forge will read your design tokens and component names to build closer to your actual design.")
+    print("  Enter your Figma file key (from the URL), or press Enter to skip:")
+
+    try:
+        answer = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if not answer:
+        return
+
+    file_key = answer
+
+    config = FigmaConfig(
+        enabled=True,
+        file_key=file_key,
+    )
+    save_figma_config(project_dir, config)
+    print(f"  {SYM_OK} Wrote .forge/figma.json for file {file_key}")
+
+    # Check for existing token
+    existing_token = get_figma_token()
+    if existing_token:
+        print(f"  {SYM_OK} Figma token already set in profile")
+        print()
+        return
+
+    print("\n  Enter your Figma personal access token (or press Enter to skip):")
+    print("  (Create one at figma.com/settings under Personal access tokens)")
+
+    try:
+        token = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if token:
+        from forge.profile import load_profile, save_profile
+        profile = load_profile()
+        profile["figma_token"] = token
+        save_profile(profile)
+        print(f"  {SYM_OK} Figma token saved to ~/.forge/profile.yaml")
+    else:
+        print(f"  {SYM_WARN} No token set - add figma_token to ~/.forge/profile.yaml later")
+
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -733,6 +796,9 @@ def run_new(project_dir: Path, description: Optional[str] = None) -> None:
 
     # Optional Vercel integration setup
     _offer_vercel_setup(project_dir)
+
+    # Optional Figma integration setup
+    _offer_figma_setup(project_dir)
 
     # Create .forge dir
     forge_dir = project_dir / ".forge"

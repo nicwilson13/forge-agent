@@ -30,6 +30,7 @@ from forge.github_integration import (
     format_issue_context,
 )
 from forge.vercel_integration import run_vercel_check, format_vercel_status
+from forge.figma_integration import run_figma_integration
 
 # Module-level state for signal handler (must not be closures)
 _current_task: Task | None = None
@@ -141,6 +142,9 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
     gh_config = load_github_config(project_dir)
     gh_token = get_github_token() if gh_config.enabled else ""
 
+    # Run Figma integration at build start
+    figma_context, figma_components = run_figma_integration(project_dir)
+
     display.print_forge_header(project_dir.name)
     log_mcp_status(mcp_config)
     if dry_run:
@@ -211,7 +215,8 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
             try:
                 tasks, _ = orchestrator.generate_tasks(project_dir, phase, state,
                                                        mcp_config=mcp_config,
-                                                       github_issues_context=issues_context)
+                                                       github_issues_context=issues_context,
+                                                       figma_context=figma_context)
             except FatalAPIError as e:
                 _handle_fatal_error(project_dir, state, None, e, logger)
             except RetryExhaustedError as e:
