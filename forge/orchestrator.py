@@ -483,11 +483,28 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
                 truncatable=True,
             ))
 
+    PAYMENTS_SIGNALS = [
+        "payment", "stripe", "billing", "subscription", "checkout",
+        "invoice", "charge", "refund", "webhook", "price", "plan",
+        "trial", "coupon", "customer", "revenue", "mrr",
+    ]
+
+    if any(sig in task_text for sig in PAYMENTS_SIGNALS):
+        payments_skill_path = skills_dir / "payments.md"
+        if payments_skill_path.exists():
+            payments_skill = payments_skill_path.read_text()
+            budget.add(ContentBlock(
+                name="payments_skill",
+                content=payments_skill,
+                priority=7,
+                truncatable=True,
+            ))
+
     allocated = budget.allocate()
 
     # Collect injected skill content
     skill_parts = []
-    for key in ("frontend_skill", "database_skill", "auth_skill"):
+    for key in ("frontend_skill", "database_skill", "auth_skill", "payments_skill"):
         content = allocated.get(key, "")
         if content:
             skill_parts.append(content)
