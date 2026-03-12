@@ -443,3 +443,292 @@ def run_linear_integration(project_dir: Path) -> tuple[str, list[dict]]:
         return (context, issues)
     except Exception:
         return ("", [])
+
+
+# ---------------------------------------------------------------------------
+# Project planning — proactive Linear sync
+# ---------------------------------------------------------------------------
+
+LINEAR_PRIORITY = {
+    "urgent": 1,   # Linear: Urgent
+    "high":   2,   # Linear: High
+    "medium": 3,   # Linear: Medium
+    "low":    4,   # Linear: Low
+    "none":   0,   # Linear: No priority
+}
+
+HIGH_PRIORITY_SIGNALS = [
+    "auth", "security", "payment", "stripe", "database schema",
+    "data model", "migration", "core", "foundation", "architecture",
+]
+
+URGENT_SIGNALS = [
+    "critical", "breaking", "production", "hotfix", "breach",
+]
+
+
+def infer_task_priority(task_title: str, task_description: str) -> int:
+    """
+    Infer Linear priority (1-4) from task title and description.
+
+    Checks URGENT_SIGNALS → 1 (Urgent)
+    Checks HIGH_PRIORITY_SIGNALS → 2 (High)
+    Default → 3 (Medium)
+    """
+    text = f"{task_title} {task_description}".lower()
+    for signal in URGENT_SIGNALS:
+        if signal in text:
+            return 1
+    for signal in HIGH_PRIORITY_SIGNALS:
+        if signal in text:
+            return 2
+    return 3
+
+
+CREATE_ISSUE_WITH_PRIORITY_MUTATION = """
+mutation IssueCreate($teamId: String!, $title: String!, $description: String!, $projectId: String, $priority: Int) {
+  issueCreate(input: {
+    teamId: $teamId
+    title: $title
+    description: $description
+    projectId: $projectId
+    priority: $priority
+  }) {
+    success
+    issue {
+      id
+      identifier
+      url
+    }
+  }
+}
+"""
+
+CREATE_MILESTONE_MUTATION = """
+mutation ProjectMilestoneCreate($projectId: String!, $name: String!, $description: String) {
+  projectMilestoneCreate(input: {
+    projectId: $projectId
+    name: $name
+    description: $description
+  }) {
+    success
+    projectMilestone {
+      id
+      name
+    }
+  }
+}
+"""
+
+CREATE_CYCLE_MUTATION = """
+mutation CycleCreate($teamId: String!, $name: String!, $description: String, $startsAt: DateTime!, $endsAt: DateTime!) {
+  cycleCreate(input: {
+    teamId: $teamId
+    name: $name
+    description: $description
+    startsAt: $startsAt
+    endsAt: $endsAt
+  }) {
+    success
+    cycle {
+      id
+      name
+      url
+    }
+  }
+}
+"""
+
+
+def create_milestone_for_phase(
+    config: LinearConfig,
+    token: str,
+    phase_title: str,
+    phase_num: int,
+    description: str = "",
+) -> dict | None:
+    """
+    Create a Linear milestone for a Forge phase.
+
+    Tries projectMilestoneCreate first (requires project_id),
+    falls back to cycleCreate.
+
+    Returns {id, name, url} or None on error.
+    """
+    if not config.enabled or not token:
+        return None
+    try:
+        name = f"Phase {phase_num}: {phase_title}"
+
+        # Try project milestone if project_id is set
+        if config.project_id:
+            data = _linear_query(
+                CREATE_MILESTONE_MUTATION,
+                {
+                    "projectId": config.project_id,
+                    "name": name,
+                    "description": description,
+                },
+                token,
+            )
+            if data and "projectMilestoneCreate" in data:
+                result = data["projectMilestoneCreate"]
+                if result.get("success"):
+                    milestone = result.get("projectMilestone", {})
+                    return {
+                        "id": milestone.get("id", ""),
+                        "name": milestone.get("name", ""),
+                        "url": "",
+                    }
+
+        # Fallback: create a cycle
+        from datetime import datetime, timedelta
+        now = datetime.utcnow()
+        start = now + timedelta(weeks=phase_num - 1)
+        end = start + timedelta(weeks=1)
+
+        data = _linear_query(
+            CREATE_CYCLE_MUTATION,
+            {
+                "teamId": config.team_id,
+                "name": name,
+                "description": description,
+                "startsAt": start.isoformat() + "Z",
+                "endsAt": end.isoformat() + "Z",
+            },
+            token,
+        )
+        if data and "cycleCreate" in data:
+            result = data["cycleCreate"]
+            if result.get("success"):
+                cycle = result.get("cycle", {})
+                return {
+                    "id": cycle.get("id", ""),
+                    "name": cycle.get("name", ""),
+                    "url": cycle.get("url", ""),
+                }
+        return None
+    except Exception:
+        return None
+
+
+def create_issue_for_task(
+    config: LinearConfig,
+    token: str,
+    task_title: str,
+    task_description: str,
+    milestone_id: str | None = None,
+    priority: int = 3,
+) -> dict | None:
+    """
+    Create a Linear issue for a Forge task with priority.
+
+    Returns {id, identifier, url} or None on error.
+    """
+    if not config.enabled or not token or not config.team_id:
+        return None
+    try:
+        variables: dict = {
+            "teamId": config.team_id,
+            "title": task_title,
+            "description": task_description,
+            "priority": priority,
+        }
+        if config.project_id:
+            variables["projectId"] = config.project_id
+        else:
+            variables["projectId"] = None
+
+        data = _linear_query(CREATE_ISSUE_WITH_PRIORITY_MUTATION, variables, token)
+        if not data or "issueCreate" not in data:
+            return None
+        create_result = data["issueCreate"]
+        if not create_result.get("success"):
+            return None
+        issue = create_result.get("issue")
+        if not isinstance(issue, dict):
+            return None
+        return {
+            "id": issue.get("id", ""),
+            "identifier": issue.get("identifier", ""),
+            "url": issue.get("url", ""),
+        }
+    except Exception:
+        return None
+
+
+def bulk_create_phase_issues(
+    config: LinearConfig,
+    token: str,
+    phase_title: str,
+    phase_num: int,
+    tasks: list,
+    milestone_id: str | None = None,
+) -> list[dict]:
+    """
+    Create Linear issues for all tasks in a phase.
+
+    Never raises - skips failed creates and continues.
+    """
+    created = []
+    try:
+        for task in tasks:
+            title = task.title if hasattr(task, "title") else str(task)
+            description = task.description if hasattr(task, "description") else ""
+            priority = infer_task_priority(title, description)
+            result = create_issue_for_task(
+                config, token, title, description,
+                milestone_id=milestone_id, priority=priority,
+            )
+            if result:
+                created.append(result)
+        print(f"  [OK] {len(created)} issues created for {phase_title}")
+    except Exception:
+        print(f"  [OK] {len(created)} issues created for {phase_title}")
+    return created
+
+
+def sync_plan_to_linear(
+    config: LinearConfig,
+    token: str,
+    phases: list,
+) -> dict:
+    """
+    Write the full Forge build plan to Linear.
+
+    For each phase:
+    1. create_milestone_for_phase()
+    2. bulk_create_phase_issues() with the milestone ID
+
+    Returns summary dict with milestones_created, issues_created, errors.
+    Never raises.
+    """
+    summary: dict = {
+        "milestones_created": 0,
+        "issues_created": 0,
+        "errors": [],
+    }
+    try:
+        for i, phase in enumerate(phases, 1):
+            title = phase.title if hasattr(phase, "title") else str(phase)
+            description = phase.description if hasattr(phase, "description") else ""
+            tasks = phase.tasks if hasattr(phase, "tasks") else []
+
+            milestone = create_milestone_for_phase(
+                config, token, title, i, description,
+            )
+            milestone_id = milestone["id"] if milestone else None
+            if milestone:
+                summary["milestones_created"] += 1
+                print(f"  [OK] Milestone: \"{milestone['name']}\"")
+            else:
+                summary["errors"].append(f"Failed to create milestone for phase {i}")
+
+            created = bulk_create_phase_issues(
+                config, token, title, i, tasks,
+                milestone_id=milestone_id,
+            )
+            summary["issues_created"] += len(created)
+    except Exception as exc:
+        summary["errors"].append(str(exc))
+    return summary

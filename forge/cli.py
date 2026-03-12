@@ -11,6 +11,7 @@ Usage:
   forge status            - Show current build status
   forge checkin           - Review NEEDS_HUMAN items interactively
   forge reset-task <id>   - Retry a parked task
+  forge linear-plan       - Generate a Linear project plan from the build plan
 """
 
 import argparse
@@ -140,6 +141,12 @@ def main():
     rt_p = subparsers.add_parser("reset-task", help="Retry a parked task by ID")
     rt_p.add_argument("task_id", help="Task ID to reset")
 
+    # forge linear-plan
+    subparsers.add_parser(
+        "linear-plan",
+        help="Generate a Linear project plan from the Forge build plan",
+    )
+
     args = parser.parse_args()
     project_dir = Path(args.project_dir).resolve()
 
@@ -183,6 +190,10 @@ def main():
     elif args.command == "reset-task":
         from forge.commands.reset_task import run_reset_task
         run_reset_task(project_dir, args.task_id)
+
+    elif args.command == "linear-plan":
+        from forge.commands.linear_plan import run_linear_plan
+        run_linear_plan(project_dir)
 
     else:
         parser.print_help()
