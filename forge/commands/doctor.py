@@ -445,6 +445,45 @@ def _check_github_config(project_dir: Path) -> CheckResult | None:
 
 
 # ---------------------------------------------------------------------------
+# CI workflow check
+# ---------------------------------------------------------------------------
+
+def _check_github_workflow(project_dir: Path) -> CheckResult | None:
+    """
+    Check .github/workflows/ci.yml if it exists.
+
+    Returns None if no workflow (optional).
+    Returns PASS if workflow file is valid YAML with jobs.
+    Returns WARN if workflow file exists but is empty or invalid YAML.
+    """
+    workflow = project_dir / ".github" / "workflows" / "ci.yml"
+    if not workflow.exists():
+        return None
+
+    try:
+        import yaml
+        content = workflow.read_text(encoding="utf-8")
+        parsed = yaml.safe_load(content)
+        if not parsed or "jobs" not in parsed:
+            return CheckResult(
+                "CI Workflow", CheckStatus.WARN,
+                "ci.yml exists but has no jobs defined",
+                "Regenerate with `forge new` or edit .github/workflows/ci.yml"
+            )
+        job_count = len(parsed.get("jobs", {}))
+        return CheckResult(
+            "CI Workflow", CheckStatus.PASS,
+            f"ci.yml valid ({job_count} job(s))"
+        )
+    except Exception as e:
+        return CheckResult(
+            "CI Workflow", CheckStatus.WARN,
+            f"ci.yml parse error: {e}",
+            "Check .github/workflows/ci.yml for YAML syntax errors"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Report printer
 # ---------------------------------------------------------------------------
 
@@ -573,6 +612,11 @@ def run_doctor(project_dir: Path) -> None:
     gh_result = _check_github_config(project_dir)
     if gh_result is not None:
         results.append(gh_result)
+
+    # CI workflow check (optional - only when ci.yml exists)
+    ci_result = _check_github_workflow(project_dir)
+    if ci_result is not None:
+        results.append(ci_result)
 
     _print_report(results)
 

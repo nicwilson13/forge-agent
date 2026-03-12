@@ -552,6 +552,41 @@ def _offer_github_setup(project_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Optional GitHub Actions workflow generation
+# ---------------------------------------------------------------------------
+
+def _offer_workflow_generation(project_dir: Path) -> None:
+    """
+    Offer optional GitHub Actions CI workflow generation.
+
+    Detects the project stack and generates .github/workflows/ci.yml.
+    Press Enter to accept (default Y), or 'n' to skip.
+    """
+    from forge.workflow_generator import generate_and_write_workflow
+
+    print("\n  Would you like to generate a GitHub Actions CI workflow? [Y/n]: ", end="")
+    try:
+        answer = input().strip().lower()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if answer in ("n", "no"):
+        return
+
+    workflow_path = generate_and_write_workflow(project_dir)
+    if workflow_path:
+        try:
+            rel = workflow_path.relative_to(project_dir)
+        except ValueError:
+            rel = workflow_path
+        print(f"  {SYM_OK} Generated: {rel}")
+    else:
+        print("  (workflow generation skipped)")
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -620,6 +655,9 @@ def run_new(project_dir: Path, description: Optional[str] = None) -> None:
 
     # Optional GitHub integration setup
     _offer_github_setup(project_dir)
+
+    # Optional GitHub Actions workflow generation
+    _offer_workflow_generation(project_dir)
 
     # Create .forge dir
     forge_dir = project_dir / ".forge"
