@@ -8,6 +8,10 @@ import time
 from pathlib import Path
 
 from forge import orchestrator, builder, git_utils, needs_human, display, checkpoint
+from forge.memory import (
+    ensure_memory_dir, extract_memory_from_qa,
+    record_decision, record_pattern, record_failure,
+)
 from forge.loop_guard import LoopGuard
 from forge.retry import FatalAPIError, RetryExhaustedError, extract_error_prefix, is_fatal_error
 from forge.state import (
@@ -207,6 +211,9 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
 # ---------------------------------------------------------------------------
 
 def _initial_setup(project_dir: Path, state: ForgeState, dry_run: bool):
+    # Initialize memory directory
+    ensure_memory_dir(project_dir)
+
     # Git setup
     if not git_utils.is_git_repo(project_dir):
         git_utils.init_repo(project_dir)
@@ -361,6 +368,24 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
             total_tasks=total_tasks,
             phase_title=phase.title,
         )
+
+        # Extract and record memory from QA summary
+        if qa_summary:
+            memory_items = extract_memory_from_qa(
+                qa_summary, task.title, task.description
+            )
+            for title, decision, rationale in memory_items.get("decisions", []):
+                record_decision(
+                    project_dir, title, decision, rationale,
+                    phase_title=phase.title, task_title=task.title
+                )
+            for name, description in memory_items.get("patterns", []):
+                record_pattern(project_dir, name, description)
+            for what, why, instead in memory_items.get("failures", []):
+                record_failure(
+                    project_dir, what, why, instead,
+                    phase_title=phase.title
+                )
 
         # Commit
         commit_msg = f"[forge] {task.title} ({task.id})"

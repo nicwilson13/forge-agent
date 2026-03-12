@@ -2,6 +2,7 @@
 from pathlib import Path
 from forge.state import load_state, TaskStatus, PhaseStatus
 from forge import git_utils
+from forge.memory import count_entries
 
 
 def run_status(project_dir: Path):
@@ -30,6 +31,12 @@ def run_status(project_dir: Path):
                     "in_progress": "→", "pending": "·",
                     "interrupted": "↺", "commit_pending": "⏳"}.get(task.status, "?")
             print(f"         {icon} [{task.id}] {task.title}")
+
+    # Memory summary
+    mem = count_entries(project_dir)
+    total_mem = mem["decisions"] + mem["patterns"] + mem["failures"]
+    if total_mem > 0:
+        print(f"\n  Memory: {mem['decisions']} decisions · {mem['patterns']} patterns · {mem['failures']} failures recorded")
 
     parked = state.all_parked_tasks()
     if parked:

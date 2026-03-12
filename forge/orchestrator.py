@@ -16,6 +16,7 @@ from typing import List, Tuple
 import anthropic
 
 from forge.context_budget import ContextBudget, ContentBlock, DEFAULT_BUDGET, estimate_tokens
+from forge.memory import load_memory_context, ensure_memory_dir
 from forge.retry import (
     FatalAPIError,
     RetryExhaustedError,
@@ -302,6 +303,8 @@ ARCHITECTURE:
 CODING STANDARDS (from CLAUDE.md):
 {claude_md}
 
+{memory_section}
+
 CURRENT PHASE: {phase_title}
 {phase_desc}
 
@@ -343,6 +346,13 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
     budget.add(ContentBlock("notes", notes_context, priority=2, truncatable=False))
     budget.add(ContentBlock("arch", arch, priority=3, truncatable=True))
     budget.add(ContentBlock("claude", claude_md, priority=4, truncatable=True))
+
+    # Load memory context
+    ensure_memory_dir(project_dir)
+    memory = load_memory_context(project_dir, max_chars=3000)
+    if memory:
+        budget.add(ContentBlock("memory", memory, priority=5, truncatable=True))
+
     budget.add(ContentBlock("vision", vision, priority=6, truncatable=True))
     budget.add(ContentBlock("skills", "", priority=7, truncatable=True))
 
@@ -352,6 +362,7 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
         vision=allocated["vision"],
         arch=allocated["arch"],
         claude_md=allocated["claude"],
+        memory_section=allocated.get("memory", ""),
         phase_title=phase.title,
         phase_desc=phase.description,
         task_title=task.title,
