@@ -79,10 +79,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
     HTTP request handler for the Forge dashboard.
 
     Routes:
-    GET /           -> serve HTML dashboard
+    GET /           -> serve HTML dashboard (redirects to /setup if no state)
     GET /state      -> return current state as JSON
     GET /events     -> SSE stream for live updates
     GET /log        -> return last 100 build log lines as JSON array
+    GET /setup      -> serve setup wizard HTML
+    GET /setup/status -> return setup status as JSON
+    POST /setup/submit  -> receive form data, write files, start forge run
+    POST /setup/ai-assist -> call Claude to draft VISION.md
+    GET /tasks          -> serve tasks view HTML
+    GET /tasks/data     -> return parked tasks as JSON
+    POST /tasks/resolve -> resolve a parked task
     """
 
     def log_message(self, format, *args):
@@ -97,11 +104,45 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._serve_sse()
         elif self.path == "/log":
             self._serve_log()
+        elif self.path == "/setup" or self.path.startswith("/setup?"):
+            from forge.setup_wizard import handle_setup_get
+            handle_setup_get(self)
+        elif self.path == "/setup/status":
+            from forge.setup_wizard import handle_setup_status
+            handle_setup_status(self, _project_dir)
+        elif self.path == "/tasks":
+            from forge.tasks_view import handle_tasks_get
+            handle_tasks_get(self)
+        elif self.path == "/tasks/data":
+            from forge.tasks_view import handle_tasks_data
+            handle_tasks_data(self, _project_dir)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+        if self.path == "/setup/submit":
+            from forge.setup_wizard import handle_setup_submit
+            handle_setup_submit(self, body, _project_dir)
+        elif self.path == "/setup/ai-assist":
+            from forge.setup_wizard import handle_ai_assist
+            handle_ai_assist(self, body)
+        elif self.path == "/tasks/resolve":
+            from forge.tasks_view import handle_tasks_resolve
+            handle_tasks_resolve(self, body, _project_dir)
         else:
             self.send_response(404)
             self.end_headers()
 
     def _serve_html(self):
+        # Redirect to setup wizard if no build state exists
+        if _project_dir and not (_project_dir / ".forge" / "state.json").exists():
+            self.send_response(302)
+            self.send_header("Location", "/setup")
+            self.end_headers()
+            return
         content = INDEX_HTML.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -246,7 +287,13 @@ INDEX_HTML = """<!DOCTYPE html>
 </style>
 </head>
 <body class="min-h-screen p-6">
-<div class="max-w-3xl mx-auto space-y-4">
+<nav style="position:fixed;top:0;left:0;right:0;height:40px;background:#1a1a1a;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;padding:0 16px;gap:24px;z-index:50;font-family:'JetBrains Mono',monospace">
+  <span style="color:#00e5a0;font-weight:700;font-size:14px">forge</span>
+  <a href="/" style="font-size:13px;color:#999;text-decoration:none" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#999'">Build</a>
+  <a href="/tasks" style="font-size:13px;color:#999;text-decoration:none" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#999'">Tasks <span id="nav-task-badge" style="display:none;background:#00e5a0;color:#0f0f0f;font-size:11px;padding:1px 6px;border-radius:8px;margin-left:4px">0</span></a>
+  <a href="/setup" style="font-size:13px;color:#999;text-decoration:none" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#999'">Setup</a>
+</nav>
+<div class="max-w-3xl mx-auto space-y-4" style="padding-top:48px">
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-3 rounded-lg" style="background:#1a1a1a;border:1px solid #2a2a2a">
     <div class="flex items-center gap-3">
@@ -387,6 +434,7 @@ function connect() {
   es.addEventListener('qa_failed', e => { try { appendLog(JSON.parse(e.data)); } catch {} });
   es.addEventListener('git_committed', e => { try { appendLog(JSON.parse(e.data)); } catch {} });
   es.addEventListener('fatal_error', e => { try { appendLog(JSON.parse(e.data)); } catch {} });
+  es.addEventListener('tasks_updated', e => { try { const d=JSON.parse(e.data); const b=document.getElementById('nav-task-badge'); if(b){if(d.count>0){b.style.display='inline';b.textContent=d.count}else{b.style.display='none'}} } catch {} });
 }
 
 // Initial load

@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -906,7 +907,52 @@ def _offer_ollama_setup(project_dir: Path) -> None:
 
 def run_new(project_dir: Path, description: Optional[str] = None) -> None:
     """
-    Run the forge new command: guided interview + document generation.
+    Run the forge new command.
+
+    Opens a browser-based setup wizard at localhost:3333/setup.
+    Falls back to terminal interview if browser cannot be opened.
+    """
+    project_dir = Path(project_dir).resolve()
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    # Try browser wizard first
+    try:
+        from forge.dashboard import start_dashboard, stop_dashboard
+        import webbrowser
+
+        thread = start_dashboard(project_dir)
+        if thread is not None:
+            url = "http://localhost:3333/setup"
+            if description:
+                import urllib.parse
+                url += f"?description={urllib.parse.quote(description)}"
+
+            print(f"\n  Setup wizard: {url}")
+            print("  Opening browser...")
+            webbrowser.open(url)
+
+            print("  Press Ctrl+C to cancel\n")
+            try:
+                while True:
+                    time.sleep(1)
+                    run_log = project_dir / ".forge" / "run_output.log"
+                    if run_log.exists():
+                        print("  Build started. Dashboard: http://localhost:3333")
+                        return
+            except KeyboardInterrupt:
+                print("\n  Setup cancelled. Falling back to terminal interview.")
+                stop_dashboard()
+                # Fall through to terminal interview
+        # If start_dashboard returned None (port in use), fall through
+    except Exception:
+        pass  # Fall through to terminal interview
+
+    _run_terminal_interview(project_dir, description)
+
+
+def _run_terminal_interview(project_dir: Path, description: Optional[str] = None) -> None:
+    """
+    Run the terminal-based forge new interview (fallback).
 
     Args:
         project_dir: The target project directory.
