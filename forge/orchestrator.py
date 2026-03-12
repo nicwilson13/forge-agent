@@ -518,11 +518,29 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
                 truncatable=True,
             ))
 
+    UI_SIGNALS = [
+        "component", "shadcn", "tailwind", "button", "input", "form",
+        "modal", "dialog", "dropdown", "table", "toast", "navbar",
+        "sidebar", "layout", "card", "tabs", "accordion", "accessible",
+        "aria", "dark mode", "theme", "responsive",
+    ]
+
+    if any(sig in task_text for sig in UI_SIGNALS):
+        ui_skill_path = skills_dir / "ui-components.md"
+        if ui_skill_path.exists():
+            ui_skill = ui_skill_path.read_text()
+            budget.add(ContentBlock(
+                name="ui_skill",
+                content=ui_skill,
+                priority=7,
+                truncatable=True,
+            ))
+
     allocated = budget.allocate()
 
     # Collect injected skill content
     skill_parts = []
-    for key in ("frontend_skill", "database_skill", "auth_skill", "payments_skill", "deploy_skill"):
+    for key in ("frontend_skill", "database_skill", "auth_skill", "payments_skill", "deploy_skill", "ui_skill"):
         content = allocated.get(key, "")
         if content:
             skill_parts.append(content)
