@@ -27,7 +27,8 @@ def run_status(project_dir: Path):
             print(f"       Tasks: {done}/{total} done")
         for task in phase.tasks:
             icon = {"done": "✓", "parked": "⚠", "failed": "✗",
-                    "in_progress": "→", "pending": "·"}.get(task.status, "?")
+                    "in_progress": "→", "pending": "·",
+                    "interrupted": "↺", "commit_pending": "⏳"}.get(task.status, "?")
             print(f"         {icon} [{task.id}] {task.title}")
 
     parked = state.all_parked_tasks()

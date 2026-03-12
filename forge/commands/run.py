@@ -2,16 +2,59 @@
 forge run - The autonomous build loop.
 """
 
+import signal
 import sys
 import time
 from pathlib import Path
 
-from forge import orchestrator, builder, git_utils, needs_human, display
+from forge import orchestrator, builder, git_utils, needs_human, display, checkpoint
 from forge.loop_guard import LoopGuard
 from forge.state import (
     ForgeState, Phase, Task, TaskStatus, PhaseStatus,
-    load_state, save_state,
+    load_state,
 )
+
+# Module-level state for signal handler (must not be closures)
+_current_task: Task | None = None
+_current_project_dir: Path | None = None
+_current_state: ForgeState | None = None
+
+
+def _setup_interrupt_handler(project_dir: Path, state: ForgeState,
+                             task: Task) -> None:
+    """Register Ctrl+C handler for the current task."""
+    global _current_task, _current_project_dir, _current_state
+    _current_task = task
+    _current_project_dir = project_dir
+    _current_state = state
+
+    def _handle_interrupt(signum, frame):
+        print("\n")
+        print("  [forge] Interrupted. Saving checkpoint...")
+        if _current_task and _current_project_dir and _current_state:
+            checkpoint.mark_task_interrupted(
+                _current_project_dir, _current_state,
+                _current_task, "ctrl_c"
+            )
+            print(f'  [forge] Task "{_current_task.title}" marked as interrupted.')
+            print("  [forge] Run `forge run` to resume from this task.")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _handle_interrupt)
+    # SIGTERM is Unix-only
+    if sys.platform != "win32":
+        signal.signal(signal.SIGTERM, _handle_interrupt)
+
+
+def _clear_interrupt_handler() -> None:
+    """Restore default Ctrl+C behavior after task completes."""
+    global _current_task, _current_project_dir, _current_state
+    _current_task = None
+    _current_project_dir = None
+    _current_state = None
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    if sys.platform != "win32":
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
 
 def run_forge(project_dir: Path, checkin_every: int = 10,
@@ -27,12 +70,26 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
         print(f"  Mode: dry run")
 
     # -----------------------------------------------------------------------
+    # Detect interrupted tasks from previous run
+    # -----------------------------------------------------------------------
+    interrupted = checkpoint.detect_interrupted_tasks(state)
+    if interrupted:
+        msg = checkpoint.resume_message(interrupted)
+        print(f"\n{msg}")
+        # Normalize any raw IN_PROGRESS tasks to INTERRUPTED
+        for task in interrupted:
+            if task.status == TaskStatus.IN_PROGRESS:
+                task.status = TaskStatus.INTERRUPTED
+                task.interrupt_reason = "crash"
+        checkpoint.atomic_save(project_dir, state)
+
+    # -----------------------------------------------------------------------
     # Phase 0: Initial setup
     # -----------------------------------------------------------------------
     if not state.initialized:
         print("\n[forge] First run - setting up project...\n")
         _initial_setup(project_dir, state, dry_run)
-        save_state(project_dir, state)
+        checkpoint.atomic_save(project_dir, state)
         if dry_run:
             display.print_dry_run_plan(state.phases)
             return
@@ -58,7 +115,7 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
             tasks = orchestrator.generate_tasks(project_dir, phase, state)
             phase.tasks = tasks
             phase.status = PhaseStatus.IN_PROGRESS
-            save_state(project_dir, state)
+            checkpoint.atomic_save(project_dir, state)
             print(f"  Generated {len(tasks)} tasks")
 
             # Pre-park tasks flagged as NEEDS_HUMAN by the planner
@@ -66,7 +123,7 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
                 if task.park_reason:
                     task.status = TaskStatus.PARKED
                     needs_human.append_item(project_dir, task, task.park_reason)
-            save_state(project_dir, state)
+            checkpoint.atomic_save(project_dir, state)
 
         # Get next executable task
         task = _next_task(phase)
@@ -74,7 +131,7 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
         if task is None:
             # All tasks done or parked - review the phase
             _complete_phase(project_dir, state, phase, loop_guard, phase_start_time)
-            save_state(project_dir, state)
+            checkpoint.atomic_save(project_dir, state)
             phase_start_time = time.time()
             continue
 
@@ -87,12 +144,12 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
                 print("\n[forge] Paused. Run `forge run` to resume.")
                 return
             state.tasks_since_checkin = 0
-            save_state(project_dir, state)
+            checkpoint.atomic_save(project_dir, state)
 
         # Execute the task
         _execute_task(project_dir, state, phase, task, loop_guard,
                       max_retries, dry_run)
-        save_state(project_dir, state)
+        checkpoint.atomic_save(project_dir, state)
 
     build_duration = time.time() - build_start_time
     display.print_build_complete(
@@ -156,10 +213,38 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
         retry_count=task.retry_count,
     )
 
-    task.status = TaskStatus.IN_PROGRESS
-    save_state(project_dir, state)
+    # Handle COMMIT_PENDING: skip Claude Code, just retry the commit
+    if task.status == TaskStatus.COMMIT_PENDING:
+        print("  [forge] Retrying commit and push...")
+        commit_msg = f"[forge] {task.title} ({task.id})"
+        hash_ = git_utils.commit_and_push(project_dir, commit_msg)
+        if hash_:
+            task.status = TaskStatus.DONE
+            task.commit_hash = hash_
+            task.completed_at = _now()
+            print(f"  [forge] Committed and pushed: {hash_}")
+        else:
+            print("  [forge] Commit failed again. Logging to NEEDS_HUMAN.")
+            task.status = TaskStatus.COMMIT_PENDING
+            needs_human.append_note(
+                project_dir,
+                f"Task '{task.title}' ({task.id}) completed but commit keeps failing. "
+                f"Manual git commit may be needed."
+            )
+        return
+
+    # For INTERRUPTED tasks, bump retry count and add context
+    if task.status == TaskStatus.INTERRUPTED:
+        task.retry_count += 1
+        if task.interrupt_reason:
+            task.notes = f"Previously interrupted ({task.interrupt_reason}). {task.notes}"
+
+    # Mark task as started with checkpoint
+    _setup_interrupt_handler(project_dir, state, task)
+    checkpoint.mark_task_started(project_dir, state, task)
 
     if dry_run:
+        _clear_interrupt_handler()
         print(f"  [dry-run] Would execute: {task.title}")
         task.status = TaskStatus.DONE
         state.tasks_completed += 1
@@ -171,6 +256,8 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
 
     # Call Claude Code
     success, stdout, stderr, duration = builder.run_task(project_dir, prompt)
+
+    _clear_interrupt_handler()
 
     # Run tests
     tests_passed, test_out, test_err = builder.run_tests(project_dir)
@@ -203,7 +290,13 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
         # Commit
         commit_msg = f"[forge] {task.title} ({task.id})"
         hash_ = git_utils.commit_and_push(project_dir, commit_msg)
-        task.commit_hash = hash_
+        if hash_:
+            task.commit_hash = hash_
+        else:
+            # Commit failed - mark as commit pending
+            checkpoint.mark_task_commit_pending(project_dir, state, task)
+            print("  [forge] Checkpoint saved: task done, commit pending.")
+            print("  Run `forge run` to retry the commit.")
 
     else:
         task.retry_count += 1
@@ -282,7 +375,12 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
 
 def _next_task(phase: Phase):
     for task in phase.tasks:
-        if task.status in (TaskStatus.PENDING, TaskStatus.FAILED):
+        if task.status in (
+            TaskStatus.PENDING,
+            TaskStatus.FAILED,
+            TaskStatus.INTERRUPTED,
+            TaskStatus.COMMIT_PENDING,
+        ):
             return task
     return None
 

@@ -17,7 +17,9 @@ class TaskStatus(str, Enum):
     IN_PROGRESS = "in_progress"
     DONE = "done"
     FAILED = "failed"
-    PARKED = "parked"   # moved to NEEDS_HUMAN
+    PARKED = "parked"           # moved to NEEDS_HUMAN
+    INTERRUPTED = "interrupted"        # was IN_PROGRESS when Forge stopped
+    COMMIT_PENDING = "commit_pending"  # task done, commit not yet pushed
 
 
 class PhaseStatus(str, Enum):
@@ -37,6 +39,8 @@ class Task:
     retry_count: int = 0
     notes: str = ""               # QA / failure notes
     park_reason: str = ""         # why it was moved to NEEDS_HUMAN
+    checkpoint_at: Optional[str] = None      # ISO timestamp of last checkpoint write
+    interrupt_reason: str = ""               # "ctrl_c", "crash", "timeout", etc.
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     completed_at: Optional[str] = None
     commit_hash: Optional[str] = None
