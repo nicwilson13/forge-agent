@@ -74,7 +74,15 @@ The build loop flows: **run.py → orchestrator.py → builder.py → git_utils.
 
 **ollama_integration.py** — Routes qualifying orchestrator planning calls to local Ollama instead of Anthropic API. `OllamaConfig` dataclass with per-project settings in `.forge/ollama.json` (enabled, host, model, use_for_planning, use_for_evaluation, timeout). `should_use_ollama(config, operation)` decides per-operation routing. `chat_with_ollama()` POSTs to `/api/chat`. `ollama_chat_with_token_estimate()` estimates tokens by word count. Builder calls always use Claude Code SDK. Zero forge imports (stdlib only). Never raises.
 
-**dashboard.py** — Local web dashboard at `localhost:3333` for live build monitoring. SSE push via `push_event()` and `update_dashboard_state()`. HTTP endpoints: `/` (HTML dashboard), `/state` (JSON), `/events` (SSE stream), `/log` (last 100 build log lines). `start_dashboard()` runs server in background thread. `stop_dashboard()` for graceful shutdown. Embedded dark-theme HTML with real-time phase/task progress, cost, health grade, integration status row, and scrolling build log. Zero forge imports (stdlib only).
+**dashboard.py** — Local web dashboard at `localhost:3333` for live build monitoring. SSE push via `push_event()` and `update_dashboard_state()`. Routes: `/` (build overview), `/tasks` (NEEDS_HUMAN task management), `/history` (past build records), `/integrations` (config management), `/linear` (Kanban board), `/setup` (project wizard), plus JSON data endpoints and `/events` (SSE stream). `start_dashboard()` runs server in background thread. `stop_dashboard()` for graceful shutdown. All page views use `nav_shell.page_shell()` for consistent layout.
+
+**nav_shell.py** — Shared HTML shell for all dashboard pages. `page_shell(title, active_route, body_content)` wraps content with nav bar, font loading, keyboard shortcuts (1-6 for page navigation), and connection status indicator. `NAV_LINKS` defines the route/label pairs. Zero forge imports (stdlib only).
+
+**history_view.py** — Past build records view. `save_build_record()` appends build metadata (grade, cost, duration, phases/tasks summary) to `.forge/build_history.json` after each run. `handle_history_get/data/build` serve the HTML and JSON endpoints. Imports only `nav_shell`.
+
+**integrations_view.py** — Config management for all 6 integrations (GitHub, Figma, Vercel, Linear, Sentry, Ollama). Inline forms for `.forge/*.json` config files, token management via `~/.forge/profile.yaml`, and connection testing. `handle_integrations_save` and `handle_integrations_test` for POST endpoints. Imports only `nav_shell`.
+
+**linear_view.py** — Kanban-style board showing Linear issues grouped by status, cross-referenced with Forge task state. `handle_linear_sync` triggers plan sync. Imports only `nav_shell`.
 
 **commands/linear_plan.py** — `forge linear-plan` command. Checks Linear config/token, reuses existing `.forge/state.json` plan if available (prompts user), otherwise generates phases and tasks via orchestrator, then calls `sync_plan_to_linear()` to write milestones and issues to Linear.
 
@@ -122,7 +130,7 @@ Three modules provide post-build analytics — all are pure (no side effects exc
 
 ## Key Patterns
 
-- **Pure utility modules** (`retry.py`, `context_budget.py`, `build_logger.py`, `memory.py`, `advanced_options.py`, `display.py`, `router.py`, `mcp_config.py`, `dependency_graph.py`, `workflow_generator.py`, `figma_integration.py`, `vercel_integration.py`, `linear_integration.py`, `sentry_integration.py`, `ollama_integration.py`, `dashboard.py`) have zero imports from other forge modules (except `dependency_graph.py` which imports only `forge.state`) — they are imported by others, never the reverse.
+- **Pure utility modules** (`retry.py`, `context_budget.py`, `build_logger.py`, `memory.py`, `advanced_options.py`, `display.py`, `router.py`, `mcp_config.py`, `dependency_graph.py`, `workflow_generator.py`, `figma_integration.py`, `vercel_integration.py`, `linear_integration.py`, `sentry_integration.py`, `ollama_integration.py`, `nav_shell.py`) have zero imports from other forge modules (except `dependency_graph.py` which imports only `forge.state`) — they are imported by others, never the reverse. Dashboard view modules (`dashboard.py`, `tasks_view.py`, `history_view.py`, `integrations_view.py`, `linear_view.py`, `setup_wizard.py`) import only `nav_shell`.
 - **Error prefixes** in builder stderr (e.g. `"RATE_LIMIT: too many requests"`) are parsed by `extract_error_prefix()` to classify errors.
 - **`_classify_anthropic_error()`** in orchestrator.py is the single place mapping SDK exceptions to error prefixes.
 - **Atomic file writes** throughout: write to `.tmp`, then `tmp.replace(target)`. Used by checkpoint, cost_tracker, build_logger, and memory.

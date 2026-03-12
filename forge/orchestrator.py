@@ -386,7 +386,7 @@ Planned phases:
                                 project_dir=project_dir,
                                 operation="write_architecture")
     arch_path = project_dir / "ARCHITECTURE.md"
-    arch_path.write_text(arch_content)
+    arch_path.write_text(arch_content, encoding="utf-8")
     print(f"  [forge] Wrote ARCHITECTURE.md")
     return usage
 

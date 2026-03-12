@@ -22,7 +22,7 @@ def run_init(project_dir: Path):
         if path.exists():
             print(f"  [skip] {filename} already exists")
         else:
-            path.write_text(content)
+            path.write_text(content, encoding="utf-8")
             print(f"  [created] {filename}")
 
     # Create .forge dir

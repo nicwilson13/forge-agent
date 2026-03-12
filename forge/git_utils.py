@@ -200,4 +200,4 @@ def ensure_gitignore(project_dir: Path):
             with open(gitignore, "a") as f:
                 f.write(entry)
     else:
-        gitignore.write_text(entry)
+        gitignore.write_text(entry, encoding="utf-8")

@@ -41,9 +41,9 @@ def append_item(project_dir: Path, task: Task, reason: str):
     p = _path(project_dir)
 
     if not p.exists():
-        p.write_text(HEADER)
+        p.write_text(HEADER, encoding="utf-8")
 
-    content = p.read_text()
+    content = p.read_text(encoding="utf-8")
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     entry = f"""
 ## [{task.id}] {task.title}
@@ -57,7 +57,7 @@ def append_item(project_dir: Path, task: Task, reason: str):
 
 ---
 """
-    p.write_text(content + entry)
+    p.write_text(content + entry, encoding="utf-8")
     print(f"  [needs_human] Parked task [{task.id}]: {task.title}")
 
 
@@ -65,16 +65,16 @@ def append_note(project_dir: Path, note: str):
     """Add a general note (non-task item) to NEEDS_HUMAN.md."""
     p = _path(project_dir)
     if not p.exists():
-        p.write_text(HEADER)
+        p.write_text(HEADER, encoding="utf-8")
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    content = p.read_text()
+    content = p.read_text(encoding="utf-8")
     entry = f"""
 ## [note] General Note - {timestamp}
 {note}
 
 ---
 """
-    p.write_text(content + entry)
+    p.write_text(content + entry, encoding="utf-8")
 
 
 def parse_resolutions(project_dir: Path) -> dict:
@@ -117,9 +117,9 @@ def mark_resolved(project_dir: Path, task_id: str):
     p = _path(project_dir)
     if not p.exists():
         return
-    content = p.read_text()
+    content = p.read_text(encoding="utf-8")
     content = content.replace(
         f"## [{task_id}]",
         f"## ~~[{task_id}]~~ RESOLVED"
     )
-    p.write_text(content)
+    p.write_text(content, encoding="utf-8")
