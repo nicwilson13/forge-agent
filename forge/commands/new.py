@@ -793,6 +793,77 @@ def _offer_linear_setup(project_dir: Path) -> None:
     print()
 
 
+def _offer_sentry_setup(project_dir: Path) -> None:
+    """
+    Offer optional Sentry integration setup at end of interview.
+
+    If the user enters an org slug, writes .forge/sentry.json.
+    Prompts for Sentry auth token and saves to ~/.forge/profile.yaml.
+    """
+    from forge.sentry_integration import SentryConfig, save_sentry_config, get_sentry_token
+
+    print("\n  Would you like to connect Sentry for error monitoring?")
+    print("  Forge will check for runtime errors after each deployment and auto-fix them.")
+    print("  Enter your Sentry org slug (from sentry.io URL), or press Enter to skip:")
+
+    try:
+        answer = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if not answer:
+        return
+
+    org_slug = answer
+
+    print("  Enter your Sentry project slug:")
+    try:
+        project_slug = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        project_slug = ""
+
+    if not project_slug:
+        print(f"  {SYM_WARN} Project slug required - skipping Sentry setup")
+        return
+
+    config = SentryConfig(
+        enabled=True,
+        org_slug=org_slug,
+        project_slug=project_slug,
+    )
+    save_sentry_config(project_dir, config)
+    print(f"  {SYM_OK} Wrote .forge/sentry.json for {org_slug}/{project_slug}")
+
+    # Check for existing token
+    existing_token = get_sentry_token()
+    if existing_token:
+        print(f"  {SYM_OK} Sentry token already set in profile")
+        print()
+        return
+
+    print("\n  Enter your Sentry auth token (or press Enter to skip):")
+    print("  (Create one at sentry.io/settings/auth-tokens/)")
+
+    try:
+        token = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if token:
+        from forge.profile import load_profile, save_profile
+        profile = load_profile()
+        profile["sentry_token"] = token
+        save_profile(profile)
+        print(f"  {SYM_OK} Sentry token saved to ~/.forge/profile.yaml")
+    else:
+        print(f"  {SYM_WARN} No token set - add sentry_token to ~/.forge/profile.yaml later")
+
+    print()
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -874,6 +945,9 @@ def run_new(project_dir: Path, description: Optional[str] = None) -> None:
 
     # Optional Linear integration setup
     _offer_linear_setup(project_dir)
+
+    # Optional Sentry integration setup
+    _offer_sentry_setup(project_dir)
 
     # Create .forge dir
     forge_dir = project_dir / ".forge"

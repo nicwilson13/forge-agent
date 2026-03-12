@@ -586,6 +586,55 @@ def _check_linear_config(project_dir: Path) -> CheckResult | None:
 
 
 # ---------------------------------------------------------------------------
+# Sentry config check
+# ---------------------------------------------------------------------------
+
+def _check_sentry_config(project_dir: Path) -> CheckResult | None:
+    """
+    Check .forge/sentry.json if present.
+
+    Returns None if not configured (optional).
+    WARN if enabled but token missing, org_slug, or project_slug empty.
+    PASS if config valid.
+    """
+    sentry_path = project_dir / ".forge" / "sentry.json"
+    if not sentry_path.exists():
+        return None
+
+    from forge.sentry_integration import load_sentry_config, get_sentry_token
+
+    config = load_sentry_config(project_dir)
+    if not config.enabled:
+        return CheckResult(
+            "Sentry Integration", CheckStatus.WARN,
+            "sentry.json exists but integration is disabled",
+            'Set "enabled": true in .forge/sentry.json to activate'
+        )
+
+    issues = []
+    if not config.org_slug:
+        issues.append("org_slug not set")
+    if not config.project_slug:
+        issues.append("project_slug not set")
+
+    token = get_sentry_token()
+    if not token:
+        issues.append("sentry_token missing from ~/.forge/profile.yaml")
+
+    if issues:
+        return CheckResult(
+            "Sentry Integration", CheckStatus.WARN,
+            f"sentry.json: {'; '.join(issues)}",
+            "Add sentry_token to ~/.forge/profile.yaml and set org_slug/project_slug in .forge/sentry.json"
+        )
+
+    return CheckResult(
+        "Sentry Integration", CheckStatus.PASS,
+        f"{config.org_slug}/{config.project_slug} (token set)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # CI workflow check
 # ---------------------------------------------------------------------------
 
@@ -768,6 +817,11 @@ def run_doctor(project_dir: Path) -> None:
     linear_result = _check_linear_config(project_dir)
     if linear_result is not None:
         results.append(linear_result)
+
+    # Sentry config check (optional - only when .forge/sentry.json exists)
+    sentry_result = _check_sentry_config(project_dir)
+    if sentry_result is not None:
+        results.append(sentry_result)
 
     # CI workflow check (optional - only when ci.yml exists)
     ci_result = _check_github_workflow(project_dir)

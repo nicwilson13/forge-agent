@@ -913,6 +913,9 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
         # Vercel deployment check
         _vercel_phase_complete(project_dir, state, phase, phase_index, logger)
 
+        # Sentry error check after deploy
+        _sentry_phase_complete(project_dir, state, phase, phase_index, logger)
+
         state.advance_phase()
     else:
         phase.status = PhaseStatus.QA_FAILED
@@ -1115,6 +1118,58 @@ def _vercel_phase_complete(
     elif status == "ready":
         if logger:
             logger.log("vercel_deployed", phase=phase_num, url=url_or_msg)
+
+
+def _sentry_phase_complete(
+    project_dir: Path,
+    state: ForgeState,
+    phase,
+    phase_index: int,
+    logger: BuildLogger | None,
+) -> None:
+    """Run Sentry error check after a phase completes successfully."""
+    from forge.sentry_integration import run_sentry_check
+
+    fix_tasks = run_sentry_check(project_dir)
+    if fix_tasks:
+        if logger:
+            logger.log("sentry_fix_tasks_created", phase=phase_index + 1,
+                       count=len(fix_tasks))
+        for title, description in fix_tasks:
+            _inject_task_into_next_phase(state, phase_index, title, description)
+
+
+def _inject_task_into_next_phase(
+    state: ForgeState,
+    current_phase_index: int,
+    task_title: str,
+    task_description: str,
+) -> None:
+    """
+    Inject a task at the start of the next phase.
+
+    If a next phase exists, prepends the task.
+    If no next phase exists, appends to current phase.
+    """
+    next_idx = current_phase_index + 1
+    if next_idx < len(state.phases):
+        target_phase = state.phases[next_idx]
+    else:
+        target_phase = state.phases[current_phase_index]
+
+    new_task = Task.new(
+        title=task_title,
+        description=task_description,
+        phase_id=target_phase.id,
+    )
+
+    # Insert before the first pending task
+    insert_idx = len(target_phase.tasks)
+    for i, t in enumerate(target_phase.tasks):
+        if t.status == TaskStatus.PENDING:
+            insert_idx = i
+            break
+    target_phase.tasks.insert(insert_idx, new_task)
 
 
 # ---------------------------------------------------------------------------
