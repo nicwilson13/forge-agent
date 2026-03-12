@@ -1,213 +1,154 @@
 # Forge
 
-**Autonomous AI development agent powered by Claude Code.**
+**Your personal developer.** Forge is an autonomous AI coding agent that builds production-grade applications from a vision document and requirements. It plans, codes, tests, deploys, and monitors, phase by phase, while you watch from a browser dashboard.
 
-Forge takes a software vision and builds it autonomously - planning phases, writing code,
-running tests, committing, pushing, and resolving its own decisions. It only stops when it
-genuinely needs you.
-
----
-
-## How It Works
+## Quick Demo
 
 ```
-VISION.md + REQUIREMENTS.md + CLAUDE.md
-          ↓
-    Orchestrator (Claude Opus)
-    - Generates development phases
-    - Writes ARCHITECTURE.md
-    - Plans tasks per phase
-          ↓
-    Builder (Claude Code CLI)
-    - Executes each task
-    - Writes real code
-    - Runs tests
-          ↓
-    QA Agent (Claude Opus)
-    - Evaluates test output
-    - Passes or retries
-          ↓
-    Git: commit + push after every passing task
-          ↓
-    Repeat until vision is complete
+$ forge run
+
+  ▸ Phase 1: Authentication & User Management
+  [route] Task "Implement Supabase auth with email/password" → claude-sonnet-4-5 (auth signal)
+  ✓ Task 1/4 completed in 2m 14s
+  ✓ Task 2/4 completed in 1m 48s
+  ✓ Task 3/4 completed in 3m 02s
+  ✓ Task 4/4 completed in 1m 31s
+  ✓ Visual QA: desktop + mobile passed
+  ✓ Security scan: 0 critical, 2 warnings
+  ✓ E2E tests: 4 passed, 0 failed
+  ✓ Vercel: https://my-app-abc123.vercel.app (READY)
+  ✓ GitHub PR: https://github.com/user/my-app/pull/3
+  ▸ Phase 2: Dashboard & Analytics ...
 ```
 
-When a task fails 3 times, or requires human judgment, it goes to `NEEDS_HUMAN.md`.
-Forge routes around it and keeps building. You review at check-in points.
+## What Forge Builds
 
----
+Forge works best for full-stack TypeScript projects. Next.js + Supabase SaaS apps, dashboards, admin panels, and anything in the skill pack domain: auth flows, payment integrations, database schemas, deployment pipelines, and UI components.
 
-## Prerequisites
-
-1. **Python 3.10+**
-2. **Claude Code CLI** installed and authenticated
-   ```
-   npm install -g @anthropic-ai/claude-code
-   claude auth
-   ```
-3. **Anthropic API key** (for the orchestrator brain)
-   ```
-   export ANTHROPIC_API_KEY=sk-ant-...
-   ```
-4. **Git** configured with your identity
-
----
-
-## Install Forge
+## Install
 
 ```bash
-git clone https://github.com/yourname/forge-agent
+pip install forge-agent
+```
+
+Or from source:
+
+```bash
+git clone https://github.com/nicholascooke/forge-agent
 cd forge-agent
 pip install -e .
 ```
 
-This installs the `forge` CLI globally.
+**Prerequisites:** Python 3.10+, Claude Code (`npm install -g @anthropic-ai/claude-code`), Node.js 20+, Git.
 
----
-
-## Usage
-
-### 1. Initialize a project
+## Quick Start
 
 ```bash
-cd /path/to/my-project
-forge init
-```
+# 1. Create a new project
+forge new "a SaaS for project management"
 
-This creates three template files:
-- `VISION.md` - describe what you're building
-- `REQUIREMENTS.md` - functional + non-functional requirements
-- `CLAUDE.md` - tech stack, standards, and coding conventions
+# 2. Edit VISION.md and REQUIREMENTS.md
 
-### 2. Fill in the docs
-
-`VISION.md` is the most important. Write it as if the product already exists.
-Be specific about screens, flows, and what "done" looks like.
-
-`CLAUDE.md` is where you set your stack. Example:
-```
-## Tech Stack
-- Language: TypeScript
-- Framework: Next.js 15 (App Router)
-- Package manager: pnpm
-- CSS: Tailwind CSS + shadcn/ui
-- Testing: Vitest + Playwright
-```
-
-### 3. Start the autonomous build
-
-```bash
+# 3. Run the build
 forge run
+
+# 4. Watch in browser
+# Dashboard auto-opens at http://localhost:3333
 ```
 
-Options:
-```
---checkin-every 10    Pause every N tasks for your review (default: 10)
---max-retries 3       Retries before parking a failing task (default: 3)
---dry-run             Show the plan without executing
---project-dir ./path  Target a different directory
-```
+## How It Works
 
-### 4. Check status any time
+1. **Plan** - Forge reads your vision and requirements, generates phases and tasks, and writes ARCHITECTURE.md.
+2. **Build** - Claude Code executes each task. Tests run after every task. Passing tasks are committed.
+3. **Verify** - Visual QA, E2E tests, diff review, and security scan run after each phase.
+4. **Ship** - Vercel deployment check, GitHub PR created, Linear milestone closed.
 
-```bash
-forge status
-```
+## Commands
 
-### 5. Handle parked items
+| Command | Description |
+|---------|-------------|
+| `forge new` | Create a new project with guided AI interview |
+| `forge init` | Scaffold template files (VISION.md, REQUIREMENTS.md, CLAUDE.md) |
+| `forge run` | Run the full build pipeline |
+| `forge status` | Show current build status, cost, health, and logs |
+| `forge checkin` | Resume after human review of parked tasks |
+| `forge reset-task <id>` | Retry a parked task by ID |
+| `forge rollback` | Roll back to a previous phase |
+| `forge doctor` | Check environment, integrations, and doc quality |
+| `forge dashboard` | View last build in browser (read-only) |
+| `forge linear-plan` | Generate a Linear project plan from the build plan |
+| `forge profile` | Manage global tool preferences and tech stack defaults |
 
-When Forge needs you, it writes to `NEEDS_HUMAN.md`. Fill in the Resolution fields,
-then:
+## Quality Layer
 
-```bash
-forge checkin
-forge run      # continues from where it left off
-```
+Four quality gates run after every phase to catch issues before they compound.
 
-### 6. Force retry a task
+- **Visual QA** - Playwright captures screenshots at desktop (1280x800) and mobile (375x812). Claude Vision evaluates layout, responsiveness, and completeness.
+- **E2E tests** - Playwright TypeScript tests generated per phase, committed permanently, and run in CI.
+- **Semantic diff review** - Claude reviews each task's diff for unexpected deletions and regressions.
+- **Security scan** - Regex patterns detect hardcoded secrets, SQL injection, eval(), and path traversal. Claude filters false positives. npm audit and pip-audit check dependencies for CVEs.
 
-```bash
-forge reset-task <task-id>
-forge run
-```
+## Skill Packs
 
----
+Domain-specific best practices injected into task generation context.
 
-## Project Files
+- **Database** - UUID PKs, RLS, reversible migrations, cursor pagination, N+1 prevention
+- **Auth** - HttpOnly cookies, Supabase `getUser()`, RBAC, CSRF protection, OAuth/OIDC
+- **Payments** - Stripe idempotency keys, webhook-driven state, PCI compliance (SAQ A)
+- **Deploy** - Vercel config, env vars, CI/CD, health checks, `maxDuration` settings
+- **UI Components** - shadcn/ui, Tailwind design tokens, accessibility (WCAG), react-hook-form + Zod
 
-After `forge init` + `forge run`, your project will have:
+## Integrations
 
-| File | Purpose |
-|------|---------|
-| `VISION.md` | End-state description (you write this) |
-| `REQUIREMENTS.md` | Feature list and constraints (you write this) |
-| `CLAUDE.md` | Tech stack and coding standards (you write this) |
-| `ARCHITECTURE.md` | Auto-generated system design (Forge writes this) |
-| `NEEDS_HUMAN.md` | Parking lot for blocked tasks (Forge writes, you resolve) |
-| `.forge/state.json` | Build state - phases, tasks, progress (Forge manages this) |
+| Integration | What Forge Does |
+|-------------|-----------------|
+| **GitHub** | Creates PRs and milestones per phase, posts build summaries, links issues to tasks |
+| **Vercel** | Polls deployment status, fetches build logs on failure, auto-injects fix tasks |
+| **Linear** | Reads issues for task planning, updates status on completion, syncs full plan via `forge linear-plan` |
+| **Sentry** | Queries runtime errors after deploys, creates fix tasks for unresolved issues |
+| **Figma** | Extracts design variables (colors, typography, spacing), generates `design-tokens.ts` |
+| **Ollama** | Routes planning tasks to a local LLM for $0.00 inference cost |
 
----
+All integrations are configured during `forge new` and validated by `forge doctor`. Tokens are stored in `~/.forge/profile.yaml`, never in the project directory.
 
-## Mitigations for Known Shortcomings
+## Dashboard
 
-| Problem | Forge's mitigation |
-|---|---|
-| Context drift | ARCHITECTURE.md re-read on every task |
-| Compounding errors | QA agent evaluates every task before committing |
-| Loop traps | LoopGuard parks tasks after N failures |
-| Scope creep | Tasks generated strictly from phase description |
-| Bad phase QA | Phase review gate before advancing |
-| Human blockers | NEEDS_HUMAN.md parking + checkin workflow |
-| Silent failures | Build + test runner output evaluated by QA agent |
+Forge starts a live web dashboard at `http://localhost:3333` during `forge run`. It shows phase progress, current task, cumulative cost, and health grade in real time. An integration status row displays the state of GitHub, Vercel, Linear, Sentry, Figma, and Ollama connections. A scrolling build log streams events as they happen. Run `forge dashboard` after a build for read-only review.
 
----
+## Model Routing
 
-## Tips for Best Results
+Forge routes each operation to the right Claude model. Opus handles architecture generation and QA evaluation. Sonnet handles task generation and most builder tasks. Haiku handles lightweight calls like phase listing. Ollama can replace Sonnet for planning tasks when configured, running locally at zero cost. After 2 failures on the assigned model, Forge automatically escalates to the next tier.
 
-- **Write a detailed VISION.md.** The more specific, the better the output.
-  Vague visions produce vague software.
-- **Set your stack in CLAUDE.md before the first run.** Changing it mid-build is messy.
-- **Check `forge status` and your repo after each phase.** This is your quality gate.
-- **Keep NEEDS_HUMAN.md open in VS Code** while Forge runs. You'll see items appear in real time.
-- **Run on a branch**, not main. Review and merge when a phase looks good.
-
----
-
-## Architecture
+## Configuration Files
 
 ```
-forge/
-├── forge/
-│   ├── cli.py              Entry point + argument parsing
-│   ├── orchestrator.py     Anthropic API: phase planning, task generation, QA eval
-│   ├── builder.py          Claude Code CLI execution + test runner
-│   ├── state.py            Build state persistence (.forge/state.json)
-│   ├── git_utils.py        Git operations
-│   ├── loop_guard.py       Retry/loop detection
-│   ├── needs_human.py      NEEDS_HUMAN.md manager
-│   └── commands/
-│       ├── run.py          Main autonomous loop
-│       ├── init.py         Template scaffolding
-│       ├── status.py       Progress display
-│       ├── checkin.py      Resolve parked tasks
-│       └── reset_task.py   Force retry a task
-└── setup.py
+project/
+├── VISION.md              # What you're building
+├── REQUIREMENTS.md        # Detailed requirements
+├── CLAUDE.md              # Tech stack and coding standards
+├── ARCHITECTURE.md        # Auto-generated system design
+├── NEEDS_HUMAN.md         # Parked tasks for human review
+└── .forge/
+    ├── state.json         # Build state (phases, tasks, progress)
+    ├── build.log          # Full event log (JSONL)
+    ├── cost_log.jsonl     # Token usage and cost per task
+    ├── memory/            # Project memory (decisions, patterns, failures)
+    ├── mcp.json           # MCP server configuration
+    ├── github.json        # GitHub integration
+    ├── vercel.json        # Vercel integration
+    ├── linear.json        # Linear integration
+    ├── sentry.json        # Sentry integration
+    ├── figma.json         # Figma integration
+    └── ollama.json        # Ollama configuration
 ```
 
----
+## Health Grades
 
-## Cost Estimate
+Forge computes a health grade (A through F) from build metrics. An A grade requires 95% or higher task success rate and average cost under $0.05 per task. The grade factors in retry rate, cost trends, and retry hotspots. Run `forge status --health` to see the current grade.
 
-Forge uses `claude-opus-4-5` for orchestration (planning and QA evaluation) and
-`claude` (Claude Code) for building. A typical session:
+## Contributing
 
-- Simple project (10-20 tasks): ~$5-15
-- Medium project (50-80 tasks): ~$25-60
-- Large project (150+ tasks): ~$100-200
-
-Tip: Use `--dry-run` to see the plan before committing to a full run.
-
----
+Contributions are welcome. Open an issue or submit a pull request at [github.com/nicholascooke/forge-agent](https://github.com/nicholascooke/forge-agent).
 
 ## License
 
