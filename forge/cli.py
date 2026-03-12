@@ -6,6 +6,7 @@ Usage:
   forge init              - Initialize project templates
   forge run               - Start autonomous build loop
   forge doctor            - Run pre-flight checks on your setup
+  forge rollback          - Roll back to a previous completed phase
   forge status            - Show current build status
   forge checkin           - Review NEEDS_HUMAN items interactively
   forge reset-task <id>   - Retry a parked task
@@ -66,6 +67,25 @@ def main():
         help="Plan phases and tasks but do not execute them",
     )
 
+    # forge rollback
+    rollback_p = subparsers.add_parser(
+        "rollback",
+        help="Roll back to a previous completed phase",
+    )
+    rollback_p.add_argument(
+        "--to-phase",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Roll back to end of phase N (e.g. --to-phase 2)",
+    )
+    rollback_p.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_only",
+        help="List available rollback points without rolling back",
+    )
+
     # forge status
     subparsers.add_parser("status", help="Print current build state")
 
@@ -95,6 +115,12 @@ def main():
         from forge.commands.run import run_forge
         run_forge(project_dir, checkin_every=args.checkin_every,
                   max_retries=args.max_retries, dry_run=args.dry_run)
+
+    elif args.command == "rollback":
+        from forge.commands.rollback import run_rollback
+        run_rollback(project_dir,
+                     to_phase=args.to_phase,
+                     list_only=args.list_only)
 
     elif args.command == "status":
         from forge.commands.status import run_status

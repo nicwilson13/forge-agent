@@ -101,6 +101,54 @@ def tag_phase(project_dir: Path, phase_title: str):
     print(f"  [git] Tagged: {tag}")
 
 
+def get_tag_commit(project_dir: Path, tag_name: str) -> Optional[str]:
+    """Return the short commit hash that a tag points to, or None if not found."""
+    code, out, _ = _run(["git", "rev-parse", "--short", tag_name], project_dir)
+    return out if code == 0 else None
+
+
+def list_forge_tags(project_dir: Path) -> list:
+    """
+    Return all forge phase tags in the repo.
+    Each dict: {"tag": "phase-1-...", "hash": "a3f9d12", "message": "..."}
+    Returns empty list if no tags or not a git repo.
+    """
+    code, out, _ = _run(
+        ["git", "tag", "-l", "phase-*", "--format=%(refname:short)\t%(objectname:short)\t%(subject)"],
+        project_dir,
+    )
+    if code != 0 or not out.strip():
+        return []
+    tags = []
+    for line in out.strip().split("\n"):
+        parts = line.split("\t", 2)
+        if len(parts) >= 2:
+            tags.append({
+                "tag": parts[0],
+                "hash": parts[1],
+                "message": parts[2] if len(parts) > 2 else "",
+            })
+    return tags
+
+
+def force_push(project_dir: Path) -> bool:
+    """
+    Force push current branch to origin.
+    WARNING: This is destructive and should only be called during rollback.
+    Returns True on success, False on failure.
+    """
+    if not has_remote(project_dir):
+        return False
+    _, branch, _ = _run(["git", "branch", "--show-current"], project_dir)
+    branch = branch.strip() or "main"
+    code, _, err = _run(["git", "push", "origin", branch, "--force"], project_dir)
+    if code != 0:
+        print(f"  [git] Force push failed: {err}")
+        return False
+    print(f"  [git] Force pushed to origin/{branch}")
+    return True
+
+
 def recent_commits(project_dir: Path, n: int = 5) -> list:
     code, out, _ = _run(
         ["git", "log", f"-{n}", "--oneline"], project_dir
