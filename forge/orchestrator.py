@@ -485,6 +485,101 @@ Architecture:
 
 
 # ---------------------------------------------------------------------------
+# Visual QA evaluation
+# ---------------------------------------------------------------------------
+
+VISION_SYSTEM_PROMPT = None  # imported lazily from visual_qa
+
+
+def evaluate_visual_qa(
+    task_title: str,
+    task_description: str,
+    screenshot_paths: list[Path],
+) -> tuple[bool, str, TokenUsage]:
+    """
+    Evaluate screenshots using Claude Vision.
+
+    This is a direct Anthropic API call (not via _chat) because it
+    requires image content blocks in the message. Wrapped with retry.
+    """
+    from forge.visual_qa import encode_screenshot, VISION_SYSTEM_PROMPT as _VISION_PROMPT
+
+    # Build content blocks
+    content: list[dict] = []
+    for path in screenshot_paths:
+        b64 = encode_screenshot(path)
+        if b64:
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": b64,
+                },
+            })
+
+    content.append({
+        "type": "text",
+        "text": f"Task: {task_title}\nRequirements: {task_description}\n\nEvaluate this UI implementation.",
+    })
+
+    # Route to opus for visual evaluation (high stakes)
+    model = MODEL_OPUS
+    last_error_str = ""
+    last_prefix = "UNKNOWN"
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = _client().messages.create(
+                model=model,
+                max_tokens=512,
+                system=_VISION_PROMPT,
+                messages=[{"role": "user", "content": content}],
+            )
+
+            text = response.content[0].text
+            usage = TokenUsage(
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                model=model,
+            )
+
+            passed = text.strip().upper().startswith("PASS")
+            return passed, text.strip(), usage
+
+        except (
+            anthropic.AuthenticationError,
+            anthropic.RateLimitError,
+            anthropic.APIConnectionError,
+            anthropic.APITimeoutError,
+            anthropic.APIStatusError,
+        ) as e:
+            prefix, is_fatal, fix_instruction = _classify_anthropic_error(e)
+            last_prefix = prefix
+            last_error_str = str(e)
+
+            if is_fatal:
+                raise FatalAPIError(
+                    error_prefix=prefix,
+                    message=last_error_str,
+                    fix_instruction=fix_instruction,
+                )
+
+            if attempt < MAX_RETRIES - 1:
+                backoff = BACKOFF_SCHEDULE[min(attempt, len(BACKOFF_SCHEDULE) - 1)]
+                wait_with_countdown(
+                    backoff,
+                    f"Visual QA retry {attempt + 1}/{MAX_RETRIES}",
+                )
+
+    raise RetryExhaustedError(
+        error_prefix=last_prefix,
+        attempts=MAX_RETRIES,
+        last_error=last_error_str,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

@@ -397,6 +397,33 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
             logger.qa_passed(state.current_phase_index, task.id,
                              task.title, qa_summary or "")
 
+        # Run visual QA for frontend tasks (after code QA passes)
+        from forge.visual_qa import run_visual_qa
+        visual_result, visual_feedback, visual_usage = run_visual_qa(
+            project_dir, task.title, task.description
+        )
+
+        if visual_result is None:
+            # Skipped - log the reason quietly
+            if visual_feedback:
+                print(f"  (visual QA skipped - {visual_feedback})")
+        elif visual_result:
+            print(f"  {display.SYM_OK} Visual QA passed - {visual_feedback[:120]}")
+            if logger:
+                logger.visual_qa_passed(state.current_phase_index,
+                                        task.id, task.title,
+                                        visual_feedback)
+        else:
+            print(f"  {display.SYM_FAIL} Visual QA failed - {visual_feedback[:120]}")
+            if logger:
+                logger.visual_qa_failed(state.current_phase_index,
+                                        task.id, task.title,
+                                        visual_feedback)
+            # Treat as QA failure - add feedback to task notes and retry
+            task.notes = f"Visual QA failed: {visual_feedback}"
+            qa_passed = False
+
+    if qa_passed:
         task.status = TaskStatus.DONE
         task.notes = qa_summary
         task.completed_at = _now()

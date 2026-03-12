@@ -141,6 +141,20 @@ class BuildLogger:
         self.log("qa_failed", phase=phase_index, task=task_id,
                  task_title=task_title, reason_preview=reason[:100])
 
+    # ----- Visual QA events -----
+
+    def visual_qa_passed(self, phase_index: int, task_id: str,
+                         task_title: str, feedback: str) -> None:
+        """Log visual_qa_passed event."""
+        self.log("visual_qa_passed", phase=phase_index, task=task_id,
+                 task_title=task_title, feedback=feedback[:100])
+
+    def visual_qa_failed(self, phase_index: int, task_id: str,
+                         task_title: str, feedback: str) -> None:
+        """Log visual_qa_failed event."""
+        self.log("visual_qa_failed", phase=phase_index, task=task_id,
+                 task_title=task_title, feedback=feedback[:100])
+
     # ----- Git events -----
 
     def git_committed(self, commit_hash: str,

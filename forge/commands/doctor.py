@@ -211,6 +211,30 @@ def _check_skills_directory() -> CheckResult:
                        f"{count} skill pack(s) loaded")
 
 
+def _check_playwright() -> CheckResult:
+    """Check if Playwright is installed with Chromium."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "--version"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            version = result.stdout.strip() or "installed"
+            return CheckResult("Playwright", CheckStatus.PASS,
+                               f"{version}  (visual QA enabled)")
+        return CheckResult("Playwright", CheckStatus.WARN,
+                           "not installed (visual QA disabled)",
+                           "pip install playwright && playwright install chromium")
+    except FileNotFoundError:
+        return CheckResult("Playwright", CheckStatus.WARN,
+                           "not installed (visual QA disabled)",
+                           "pip install playwright && playwright install chromium")
+    except (subprocess.TimeoutExpired, OSError):
+        return CheckResult("Playwright", CheckStatus.WARN,
+                           "version check failed (visual QA disabled)",
+                           "pip install playwright && playwright install chromium")
+
+
 # ---------------------------------------------------------------------------
 # Project-specific checks
 # ---------------------------------------------------------------------------
@@ -360,6 +384,7 @@ def run_doctor(project_dir: Path) -> None:
         ("git", _check_git_installed),
         ("git_identity", None),  # depends on git
         ("skills", _check_skills_directory),
+        ("playwright", _check_playwright),
     ]
 
     # Run standard checks
