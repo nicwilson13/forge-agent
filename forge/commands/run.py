@@ -616,6 +616,44 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
         if not is_playwright_available():
             print("  (E2E tests skipped - playwright not available)")
 
+    # Run security scan before phase QA evaluation
+    from forge.security_scan import run_security_scan, format_scan_results, Finding
+
+    security_critical_count = 0
+    security_warnings_count = 0
+
+    print(f"\n  [forge] Security scan...")
+    try:
+        confirmed, sec_warnings, audit_vulns, sec_usage = run_security_scan(
+            project_dir, run_audit=True
+        )
+        files_scanned = sum(1 for p in project_dir.rglob("*") if p.is_file())
+        scan_output = format_scan_results(
+            confirmed, sec_warnings, audit_vulns, files_scanned
+        )
+        print(f"  {scan_output}")
+
+        security_critical_count = len(confirmed)
+        security_warnings_count = len(sec_warnings)
+
+        if confirmed:
+            if logger:
+                logger.log("security_critical", phase=phase_index,
+                           count=len(confirmed),
+                           categories=[f.category for f in confirmed])
+            # Route critical findings back to Claude Code for fixing
+            fix_prompt = _build_security_fix_prompt(confirmed, project_dir)
+            _inject_security_fix_task(state, phase, fix_prompt)
+
+        if sec_warnings:
+            if logger:
+                logger.log("security_warnings", phase=phase_index,
+                           count=len(sec_warnings))
+    except (FatalAPIError, RetryExhaustedError):
+        raise
+    except Exception as e:
+        print(f"  (Security scan skipped - unexpected error: {e})")
+
     print(f"\n[forge] Running phase QA review...")
 
     try:
@@ -623,6 +661,8 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
             project_dir, phase,
             e2e_passed=e2e_passed,
             e2e_summary=e2e_summary,
+            security_critical=security_critical_count,
+            security_warnings=security_warnings_count,
         )
     except FatalAPIError as e:
         _handle_fatal_error(project_dir, state, None, e, logger)
@@ -685,6 +725,58 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
                                 notes or "QA review did not approve")
         # Advance anyway to avoid infinite loop, but flag it
         state.advance_phase()
+
+
+# ---------------------------------------------------------------------------
+# Security fix helpers
+# ---------------------------------------------------------------------------
+
+def _build_security_fix_prompt(findings: list, project_dir: Path) -> str:
+    """Build a task prompt for fixing confirmed security findings."""
+    lines = ["Fix the following confirmed security vulnerabilities:\n"]
+    for f in findings:
+        lines.append(f"- [{f.category}] {f.file_path}:{f.line_number}")
+        lines.append(f"  Code: {f.line_content}")
+        # Include surrounding context
+        from forge.security_scan import get_file_context
+        ctx = get_file_context(project_dir / f.file_path, f.line_number)
+        if ctx:
+            lines.append(f"  Context:\n{ctx}")
+        lines.append("")
+
+    lines.append(
+        "For each finding:\n"
+        "- Remove or rotate any hardcoded secrets (use environment variables)\n"
+        "- Fix SQL injection by using parameterized queries\n"
+        "- Replace eval() with safer alternatives\n"
+        "- Sanitize file paths to prevent path traversal\n"
+    )
+    return "\n".join(lines)
+
+
+def _inject_security_fix_task(state: ForgeState, phase: Phase,
+                               fix_prompt: str) -> None:
+    """
+    Add a security fix task to the current phase's task list.
+
+    Creates a new Task with title 'Fix security findings' and
+    the fix prompt as description. Inserts it as the next task
+    to execute (before any remaining pending tasks).
+    """
+    new_task = Task.new(
+        title="Fix security findings",
+        description=fix_prompt,
+        phase_id=phase.id,
+    )
+
+    # Find the first pending task and insert before it
+    insert_idx = len(phase.tasks)
+    for i, t in enumerate(phase.tasks):
+        if t.status == TaskStatus.PENDING:
+            insert_idx = i
+            break
+
+    phase.tasks.insert(insert_idx, new_task)
 
 
 # ---------------------------------------------------------------------------

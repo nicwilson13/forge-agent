@@ -235,6 +235,54 @@ def _check_playwright() -> CheckResult:
                            "pip install playwright && playwright install chromium")
 
 
+def _check_npm_audit() -> CheckResult:
+    """Check if npm audit is available."""
+    try:
+        result = subprocess.run(
+            ["npm", "--version"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            version = result.stdout.strip()
+            return CheckResult("npm audit", CheckStatus.PASS,
+                               f"npm v{version}  (dependency audit enabled)")
+        return CheckResult("npm audit", CheckStatus.WARN,
+                           "npm not found - dependency audit unavailable",
+                           "Install Node.js from nodejs.org")
+    except FileNotFoundError:
+        return CheckResult("npm audit", CheckStatus.WARN,
+                           "npm not found - dependency audit unavailable",
+                           "Install Node.js from nodejs.org")
+    except (subprocess.TimeoutExpired, OSError):
+        return CheckResult("npm audit", CheckStatus.WARN,
+                           "npm check failed - dependency audit unavailable",
+                           "Install Node.js from nodejs.org")
+
+
+def _check_pip_audit() -> CheckResult:
+    """Check if pip-audit is installed."""
+    try:
+        result = subprocess.run(
+            ["pip-audit", "--version"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            version = result.stdout.strip()
+            return CheckResult("pip-audit", CheckStatus.PASS,
+                               f"{version}  (Python dependency audit enabled)")
+        return CheckResult("pip-audit", CheckStatus.WARN,
+                           "pip-audit not found - Python dependency audit unavailable",
+                           "pip install pip-audit")
+    except FileNotFoundError:
+        return CheckResult("pip-audit", CheckStatus.WARN,
+                           "pip-audit not found - Python dependency audit unavailable",
+                           "pip install pip-audit")
+    except (subprocess.TimeoutExpired, OSError):
+        return CheckResult("pip-audit", CheckStatus.WARN,
+                           "pip-audit check failed - Python dependency audit unavailable",
+                           "pip install pip-audit")
+
+
 # ---------------------------------------------------------------------------
 # Project-specific checks
 # ---------------------------------------------------------------------------
@@ -385,6 +433,8 @@ def run_doctor(project_dir: Path) -> None:
         ("git_identity", None),  # depends on git
         ("skills", _check_skills_directory),
         ("playwright", _check_playwright),
+        ("npm_audit", _check_npm_audit),
+        ("pip_audit", _check_pip_audit),
     ]
 
     # Run standard checks

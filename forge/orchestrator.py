@@ -453,7 +453,9 @@ Return JSON:
 
 def evaluate_phase(project_dir: Path, phase: Phase,
                    e2e_passed: bool | None = None,
-                   e2e_summary: str = "") -> Tuple[bool, str, TokenUsage]:
+                   e2e_summary: str = "",
+                   security_critical: int = 0,
+                   security_warnings: int = 0) -> Tuple[bool, str, TokenUsage]:
     model = route_orchestrator("evaluate_phase")
     log_route("evaluate_phase", model, "moderate")
 
@@ -474,6 +476,14 @@ def evaluate_phase(project_dir: Path, phase: Phase,
         e2e_status = "PASSED" if e2e_passed else "FAILED"
         e2e_section = f"\nE2E Test Results: {e2e_status}\n{e2e_summary[:500]}\n"
 
+    # Include security scan results when available
+    security_section = ""
+    if security_critical > 0 or security_warnings > 0:
+        security_section = (
+            f"\nSecurity Scan: {security_critical} confirmed critical finding(s), "
+            f"{security_warnings} warning(s)\n"
+        )
+
     user = f"""
 Phase: {phase.title}
 Phase goal: {phase.description}
@@ -483,7 +493,7 @@ Completed tasks:
 
 Architecture:
 {allocated["arch"]}
-{e2e_section}"""
+{e2e_section}{security_section}"""
     result, usage = _json_chat(PHASE_QA_SYSTEM, user, model=model)
     approved = result.get("approved", False)
     notes = result.get("notes", "")
