@@ -5,6 +5,7 @@ Usage:
   forge new [description] - Generate project docs via guided interview
   forge init              - Initialize project templates
   forge run               - Start autonomous build loop
+  forge doctor            - Run pre-flight checks on your setup
   forge status            - Show current build status
   forge checkin           - Review NEEDS_HUMAN items interactively
   forge reset-task <id>   - Retry a parked task
@@ -34,6 +35,12 @@ def main():
         nargs="?",
         default=None,
         help="Product description (optional - will prompt if not provided)",
+    )
+
+    # forge doctor
+    subparsers.add_parser(
+        "doctor",
+        help="Run pre-flight checks on your Forge setup",
     )
 
     # forge init
@@ -72,7 +79,11 @@ def main():
     args = parser.parse_args()
     project_dir = Path(args.project_dir).resolve()
 
-    if args.command == "new":
+    if args.command == "doctor":
+        from forge.commands.doctor import run_doctor
+        run_doctor(project_dir)
+
+    elif args.command == "new":
         from forge.commands.new import run_new
         run_new(project_dir, args.description)
 
