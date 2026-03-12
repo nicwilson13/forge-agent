@@ -147,6 +147,18 @@ def main():
         help="Generate a Linear project plan from the Forge build plan",
     )
 
+    # forge dashboard
+    dash_p = subparsers.add_parser(
+        "dashboard",
+        help="View build dashboard in browser (read-only mode)",
+    )
+    dash_p.add_argument(
+        "--port",
+        type=int,
+        default=3333,
+        help="Port for the dashboard server (default: 3333)",
+    )
+
     args = parser.parse_args()
     project_dir = Path(args.project_dir).resolve()
 
@@ -194,6 +206,10 @@ def main():
     elif args.command == "linear-plan":
         from forge.commands.linear_plan import run_linear_plan
         run_linear_plan(project_dir)
+
+    elif args.command == "dashboard":
+        from forge.commands.dashboard import run_dashboard_command
+        run_dashboard_command(project_dir, port=args.port)
 
     else:
         parser.print_help()

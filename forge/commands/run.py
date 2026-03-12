@@ -156,6 +156,11 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
 
     display.print_forge_header(project_dir.name)
     log_mcp_status(mcp_config)
+
+    # Start web dashboard
+    from forge.dashboard import start_dashboard, stop_dashboard, update_dashboard_state
+    dashboard_thread = start_dashboard(project_dir)
+
     if dry_run:
         print(f"  Mode: dry run")
 
@@ -253,6 +258,21 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
                            mcp_config=mcp_config,
                            gh_config=gh_config, gh_token=gh_token)
             checkpoint.atomic_save(project_dir, state)
+
+            # Update dashboard
+            total_tasks = sum(len(p.tasks) for p in state.phases)
+            tasks_done = sum(1 for p in state.phases for t in p.tasks if t.status == "done")
+            update_dashboard_state({
+                "project_name": state.project_name or project_dir.name,
+                "current_phase": state.current_phase_index + 1,
+                "total_phases": len(state.phases),
+                "phase_title": state.current_phase.title if state.current_phase else phase.title,
+                "tasks_done": tasks_done,
+                "total_tasks": total_tasks,
+                "cost": f"${tracker.session_total_cost():.2f}",
+                "integrations": _get_integration_statuses(project_dir),
+            })
+
             phase_start_time = time.time()
             continue
 
@@ -318,6 +338,44 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
     report = compute_health_report(project_dir, logger.session_id)
     print()
     print(f"  {format_health_summary_line(report)}")
+
+    # Final dashboard update and stop
+    update_dashboard_state({
+        "health": report.grade,
+        "task_status": "complete",
+    })
+    stop_dashboard()
+
+
+# ---------------------------------------------------------------------------
+# Dashboard helpers
+# ---------------------------------------------------------------------------
+
+def _get_integration_statuses(project_dir: Path) -> dict:
+    """
+    Return dict of integration names to status strings.
+    "ok" if config exists and enabled, "-" if not configured.
+    """
+    statuses = {}
+    for name, filename in [
+        ("github", "github.json"),
+        ("vercel", "vercel.json"),
+        ("linear", "linear.json"),
+        ("sentry", "sentry.json"),
+        ("figma", "figma.json"),
+        ("ollama", "ollama.json"),
+    ]:
+        config_path = project_dir / ".forge" / filename
+        if config_path.exists():
+            try:
+                import json
+                data = json.loads(config_path.read_text(encoding="utf-8"))
+                statuses[name] = "ok" if data.get("enabled") else "-"
+            except Exception:
+                statuses[name] = "-"
+        else:
+            statuses[name] = "-"
+    return statuses
 
 
 # ---------------------------------------------------------------------------

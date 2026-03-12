@@ -58,6 +58,13 @@ class BuildLogger:
         record = self._make_record(event, phase, task, **kwargs)
         self._write_event(record)
 
+        # Push to dashboard SSE clients
+        try:
+            from forge.dashboard import push_event
+            push_event(event, record)
+        except Exception:
+            pass
+
     # ----- Session lifecycle -----
 
     def session_started(self, project_name: str,
