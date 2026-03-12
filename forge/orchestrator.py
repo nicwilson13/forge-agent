@@ -73,18 +73,22 @@ def _classify_anthropic_error(exc: Exception) -> tuple[str, bool, str]:
 
 
 def _chat(system: str, user: str, max_tokens: int = 4096,
-          model: str = MODEL_OPUS) -> tuple[str, TokenUsage]:
+          model: str = MODEL_OPUS,
+          mcp_servers: list[dict] | None = None) -> tuple[str, TokenUsage]:
     last_error_str = ""
     last_prefix = "UNKNOWN"
 
     for attempt in range(MAX_RETRIES):
         try:
-            resp = _client().messages.create(
+            kwargs = dict(
                 model=model,
                 max_tokens=max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": user}],
             )
+            if mcp_servers:
+                kwargs["mcp_servers"] = mcp_servers
+            resp = _client().messages.create(**kwargs)
             usage = TokenUsage(
                 input_tokens=resp.usage.input_tokens,
                 output_tokens=resp.usage.output_tokens,
@@ -124,10 +128,12 @@ def _chat(system: str, user: str, max_tokens: int = 4096,
 
 
 def _json_chat(system: str, user: str, max_tokens: int = 4096,
-               model: str = MODEL_OPUS) -> tuple[dict | list, TokenUsage]:
+               model: str = MODEL_OPUS,
+               mcp_servers: list[dict] | None = None) -> tuple[dict | list, TokenUsage]:
     """Call API and parse JSON from the response. Returns (parsed_json, usage)."""
     system_with_json = system + "\n\nYou MUST respond with valid JSON only. No prose, no markdown fences."
-    raw, usage = _chat(system_with_json, user, max_tokens, model=model)
+    raw, usage = _chat(system_with_json, user, max_tokens, model=model,
+                       mcp_servers=mcp_servers)
     # Strip accidental markdown fences
     raw = raw.strip()
     if raw.startswith("```"):
@@ -163,7 +169,7 @@ Return a JSON array of phase objects:
 """
 
 
-def generate_phases(project_dir: Path) -> Tuple[List[Phase], TokenUsage]:
+def generate_phases(project_dir: Path, mcp_config=None) -> Tuple[List[Phase], TokenUsage]:
     model = route_orchestrator("generate_phases")
     log_route("generate_phases", model, "structured list")
 
@@ -181,7 +187,9 @@ REQUIREMENTS.md:
 CLAUDE.md (constraints + preferences):
 {claude_md}
 """
-    raw_phases, usage = _json_chat(PHASE_SYSTEM, user, model=model)
+    mcp_servers = mcp_config.to_api_format("task_generation") if mcp_config else None
+    raw_phases, usage = _json_chat(PHASE_SYSTEM, user, model=model,
+                                   mcp_servers=mcp_servers or None)
     return [Phase.new(p["title"], p["description"]) for p in raw_phases], usage
 
 
@@ -234,7 +242,8 @@ Rules for depends_on:
 """
 
 
-def generate_tasks(project_dir: Path, phase: Phase, state: ForgeState) -> Tuple[List[Task], TokenUsage]:
+def generate_tasks(project_dir: Path, phase: Phase, state: ForgeState,
+                   mcp_config=None) -> Tuple[List[Task], TokenUsage]:
     model = route_orchestrator("generate_tasks")
     log_route("generate_tasks", model, "moderate complexity")
 
@@ -266,7 +275,9 @@ Now generate tasks for this phase:
 Title: {phase.title}
 Description: {phase.description}
 """
-    raw_tasks, usage = _json_chat(TASK_SYSTEM, user, model=model)
+    mcp_servers = mcp_config.to_api_format("task_generation") if mcp_config else None
+    raw_tasks, usage = _json_chat(TASK_SYSTEM, user, model=model,
+                                  mcp_servers=mcp_servers or None)
     tasks = []
     # Map API-generated IDs (e.g. t_01) to real UUIDs
     id_map: dict[str, str] = {}
@@ -311,7 +322,8 @@ Keep it focused and scannable. Max 600 words.
 """
 
 
-def write_architecture(project_dir: Path, phases: List[Phase]) -> TokenUsage:
+def write_architecture(project_dir: Path, phases: List[Phase],
+                       mcp_config=None) -> TokenUsage:
     model = route_orchestrator("write_architecture")
     log_route("write_architecture", model, "high stakes")
 
@@ -333,7 +345,9 @@ CLAUDE.md:
 Planned phases:
 {phases_summary}
 """
-    arch_content, usage = _chat(ARCH_SYSTEM, user, model=model)
+    mcp_servers = mcp_config.to_api_format("architecture") if mcp_config else None
+    arch_content, usage = _chat(ARCH_SYSTEM, user, model=model,
+                                mcp_servers=mcp_servers or None)
     arch_path = project_dir / "ARCHITECTURE.md"
     arch_path.write_text(arch_content)
     print(f"  [forge] Wrote ARCHITECTURE.md")
@@ -444,7 +458,8 @@ Return JSON:
 """
 
 
-def evaluate_qa(task: Task, test_output: str, error_output: str) -> Tuple[bool, str, str, TokenUsage]:
+def evaluate_qa(task: Task, test_output: str, error_output: str,
+                mcp_config=None) -> Tuple[bool, str, str, TokenUsage]:
     model = route_orchestrator("evaluate_qa")
     log_route("evaluate_qa", model, "high stakes")
 
@@ -458,7 +473,9 @@ Test output:
 Errors:
 {error_output[-2000:] if error_output else 'None'}
 """
-    result, usage = _json_chat(QA_EVAL_SYSTEM, user, model=model)
+    mcp_servers = mcp_config.to_api_format("qa_evaluation") if mcp_config else None
+    result, usage = _json_chat(QA_EVAL_SYSTEM, user, model=model,
+                               mcp_servers=mcp_servers or None)
     passed = result.get("passed", False)
     summary = result.get("summary", "")
     retry_prompt = result.get("retry_prompt") or ""
@@ -489,7 +506,8 @@ def evaluate_phase(project_dir: Path, phase: Phase,
                    e2e_passed: bool | None = None,
                    e2e_summary: str = "",
                    security_critical: int = 0,
-                   security_warnings: int = 0) -> Tuple[bool, str, TokenUsage]:
+                   security_warnings: int = 0,
+                   mcp_config=None) -> Tuple[bool, str, TokenUsage]:
     model = route_orchestrator("evaluate_phase")
     log_route("evaluate_phase", model, "moderate")
 
@@ -528,7 +546,9 @@ Completed tasks:
 Architecture:
 {allocated["arch"]}
 {e2e_section}{security_section}"""
-    result, usage = _json_chat(PHASE_QA_SYSTEM, user, model=model)
+    mcp_servers = mcp_config.to_api_format("phase_evaluation") if mcp_config else None
+    result, usage = _json_chat(PHASE_QA_SYSTEM, user, model=model,
+                               mcp_servers=mcp_servers or None)
     approved = result.get("approved", False)
     notes = result.get("notes", "")
     if result.get("blocking_issues"):

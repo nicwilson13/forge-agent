@@ -126,7 +126,12 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
     logger = BuildLogger(project_dir)
     build_start_time = time.time()
 
+    # Load MCP configuration
+    from forge.mcp_config import load_mcp_config, log_mcp_status
+    mcp_config = load_mcp_config(project_dir)
+
     display.print_forge_header(project_dir.name)
+    log_mcp_status(mcp_config)
     if dry_run:
         print(f"  Mode: dry run")
 
@@ -150,7 +155,7 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
     if not state.initialized:
         print("\n[forge] First run - setting up project...\n")
         try:
-            _initial_setup(project_dir, state, dry_run)
+            _initial_setup(project_dir, state, dry_run, mcp_config=mcp_config)
         except FatalAPIError as e:
             _handle_fatal_error(project_dir, state, None, e, logger)
         except RetryExhaustedError as e:
@@ -184,7 +189,8 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
 
             print(f"\n[forge] Planning tasks for: {phase.title}")
             try:
-                tasks, _ = orchestrator.generate_tasks(project_dir, phase, state)
+                tasks, _ = orchestrator.generate_tasks(project_dir, phase, state,
+                                                       mcp_config=mcp_config)
             except FatalAPIError as e:
                 _handle_fatal_error(project_dir, state, None, e, logger)
             except RetryExhaustedError as e:
@@ -207,7 +213,8 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
 
         if task is None:
             # All tasks done or parked - review the phase
-            _complete_phase(project_dir, state, phase, loop_guard, phase_start_time, tracker, logger)
+            _complete_phase(project_dir, state, phase, loop_guard, phase_start_time, tracker, logger,
+                           mcp_config=mcp_config)
             checkpoint.atomic_save(project_dir, state)
             phase_start_time = time.time()
             continue
@@ -230,7 +237,8 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
                           f"  ({len(pending)} tasks, {min(max_parallel, len(pending))} parallel)\n")
                 completed = await _run_phase_parallel(
                     project_dir, state, phase, loop_guard,
-                    max_retries, dry_run, tracker, logger, max_parallel
+                    max_retries, dry_run, tracker, logger, max_parallel,
+                    mcp_config=mcp_config
                 )
                 checkpoint.atomic_save(project_dir, state)
                 continue
@@ -248,7 +256,8 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
 
         # Execute the task (sequential)
         await _execute_task(project_dir, state, phase, task, loop_guard,
-                            max_retries, dry_run, tracker, logger)
+                            max_retries, dry_run, tracker, logger,
+                            mcp_config=mcp_config)
         checkpoint.atomic_save(project_dir, state)
 
     build_duration = time.time() - build_start_time
@@ -276,7 +285,8 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
 # Initial setup
 # ---------------------------------------------------------------------------
 
-def _initial_setup(project_dir: Path, state: ForgeState, dry_run: bool):
+def _initial_setup(project_dir: Path, state: ForgeState, dry_run: bool,
+                   mcp_config=None):
     # Initialize memory directory
     ensure_memory_dir(project_dir)
 
@@ -287,7 +297,7 @@ def _initial_setup(project_dir: Path, state: ForgeState, dry_run: bool):
 
     # Generate phases
     print("[forge] Generating development phases from VISION.md + REQUIREMENTS.md...")
-    phases, _ = orchestrator.generate_phases(project_dir)
+    phases, _ = orchestrator.generate_phases(project_dir, mcp_config=mcp_config)
     state.phases = phases
     state.project_name = project_dir.name
     print(f"  Generated {len(phases)} phases:")
@@ -297,7 +307,7 @@ def _initial_setup(project_dir: Path, state: ForgeState, dry_run: bool):
     # Write ARCHITECTURE.md
     print("\n[forge] Writing ARCHITECTURE.md...")
     if not dry_run:
-        _ = orchestrator.write_architecture(project_dir, phases)
+        _ = orchestrator.write_architecture(project_dir, phases, mcp_config=mcp_config)
         state.architecture_written = True
 
     state.initialized = True
@@ -319,7 +329,8 @@ async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
                         max_retries: int, dry_run: bool,
                         tracker: CostTracker | None = None,
                         logger: BuildLogger | None = None,
-                        locks: ParallelLocks | None = None):
+                        locks: ParallelLocks | None = None,
+                        mcp_config=None):
     task_index = phase.tasks.index(task)
     total_tasks = len(phase.tasks)
 
@@ -466,7 +477,7 @@ async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
     # QA evaluation via orchestrator
     try:
         qa_passed, qa_summary, retry_prompt, qa_usage = orchestrator.evaluate_qa(
-            task, test_out, stderr + test_err
+            task, test_out, stderr + test_err, mcp_config=mcp_config
         )
     except FatalAPIError as e:
         _handle_fatal_error(project_dir, state, task, e, logger)
@@ -648,6 +659,7 @@ async def _run_phase_parallel(
     tracker: CostTracker | None,
     logger: BuildLogger | None,
     max_parallel: int,
+    mcp_config=None,
 ) -> int:
     """
     Run all pending tasks in a phase using parallel execution.
@@ -669,7 +681,8 @@ async def _run_phase_parallel(
             await _execute_task(
                 project_dir, state, phase, task,
                 loop_guard, max_retries, dry_run,
-                tracker, logger, locks=locks
+                tracker, logger, locks=locks,
+                mcp_config=mcp_config
             )
             success = task.status == TaskStatus.DONE
             return TaskResult(task.id, success, time.time() - start)
@@ -688,7 +701,8 @@ async def _run_phase_parallel(
 def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
                     loop_guard: LoopGuard, phase_start_time: float,
                     tracker: CostTracker | None = None,
-                    logger: BuildLogger | None = None):
+                    logger: BuildLogger | None = None,
+                    mcp_config=None):
     # Run E2E tests before phase QA evaluation
     from forge.e2e_generator import (
         should_generate_e2e, generate_e2e_tests,
@@ -778,6 +792,7 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
             e2e_summary=e2e_summary,
             security_critical=security_critical_count,
             security_warnings=security_warnings_count,
+            mcp_config=mcp_config,
         )
     except FatalAPIError as e:
         _handle_fatal_error(project_dir, state, None, e, logger)

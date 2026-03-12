@@ -363,6 +363,41 @@ def _check_claude_md(project_dir: Path) -> CheckResult:
 
 
 # ---------------------------------------------------------------------------
+# MCP config check
+# ---------------------------------------------------------------------------
+
+def _check_mcp_config(project_dir: Path) -> CheckResult | None:
+    """
+    Check .forge/mcp.json if it exists.
+
+    Returns None if no mcp.json (not a failure - MCP is optional).
+    Returns PASS if config is valid.
+    Returns WARN if config has validation errors.
+    """
+    mcp_path = project_dir / ".forge" / "mcp.json"
+    if not mcp_path.exists():
+        return None
+
+    from forge.mcp_config import load_mcp_config, validate_mcp_server
+
+    config = load_mcp_config(project_dir)
+    errors = []
+    for server in config.servers:
+        errors.extend(validate_mcp_server(server))
+
+    if errors:
+        return CheckResult(
+            "MCP Config", CheckStatus.WARN,
+            f"mcp.json has {len(errors)} validation error(s)",
+            f"Edit .forge/mcp.json: {'; '.join(errors[:2])}"
+        )
+    return CheckResult(
+        "MCP Config", CheckStatus.PASS,
+        f"{len(config.servers)} server(s) configured"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Report printer
 # ---------------------------------------------------------------------------
 
@@ -481,6 +516,11 @@ def run_doctor(project_dir: Path) -> None:
             except Exception as e:
                 results.append(CheckResult(check_fn.__name__, CheckStatus.FAIL,
                                            f"unexpected error: {e}"))
+
+    # MCP config check (optional - only when .forge/mcp.json exists)
+    mcp_result = _check_mcp_config(project_dir)
+    if mcp_result is not None:
+        results.append(mcp_result)
 
     _print_report(results)
 

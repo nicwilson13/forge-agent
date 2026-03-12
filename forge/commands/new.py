@@ -438,6 +438,50 @@ def _generate_docs(project_dir: Path, description: str, answers: dict,
 
 
 # ---------------------------------------------------------------------------
+# Optional MCP setup
+# ---------------------------------------------------------------------------
+
+def _offer_mcp_setup(project_dir: Path) -> None:
+    """
+    Offer optional MCP server setup at end of interview.
+
+    If the user types a known service name, writes a starter .forge/mcp.json.
+    Press Enter to skip.
+    """
+    from forge.mcp_config import KNOWN_MCP_STARTERS, MCPServer, MCPConfig, save_mcp_config
+
+    print("\n  Would you like to connect external tools via MCP?")
+    print("  MCP lets Forge read live data from GitHub, Supabase, Linear, and more")
+    print("  during the build. Press Enter to skip, or type a service name to add it.")
+    print(f"  Common options: {', '.join(KNOWN_MCP_STARTERS.keys())}")
+
+    try:
+        answer = input("  > ").strip().lower()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if not answer:
+        return
+
+    servers = []
+    for name in answer.replace(",", " ").split():
+        name = name.strip()
+        if name in KNOWN_MCP_STARTERS:
+            starter = KNOWN_MCP_STARTERS[name]
+            servers.append(MCPServer(**starter))
+            print(f"  {SYM_OK} Added {name} MCP server")
+        else:
+            print(f"  {SYM_WARN} Unknown service '{name}' - skipped")
+
+    if servers:
+        config = MCPConfig(servers=servers)
+        save_mcp_config(project_dir, config)
+        print(f"  Wrote .forge/mcp.json with {len(servers)} server(s)")
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -500,6 +544,9 @@ def run_new(project_dir: Path, description: Optional[str] = None) -> None:
     except KeyboardInterrupt:
         print("\n\n[forge] Interview cancelled.")
         return
+
+    # Optional MCP setup
+    _offer_mcp_setup(project_dir)
 
     # Create .forge dir
     forge_dir = project_dir / ".forge"
