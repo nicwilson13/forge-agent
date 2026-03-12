@@ -6,15 +6,12 @@ import sys
 import time
 from pathlib import Path
 
-from forge import orchestrator, builder, git_utils, needs_human
+from forge import orchestrator, builder, git_utils, needs_human, display
 from forge.loop_guard import LoopGuard
 from forge.state import (
     ForgeState, Phase, Task, TaskStatus, PhaseStatus,
     load_state, save_state,
 )
-
-
-DIVIDER = "=" * 64
 
 
 def run_forge(project_dir: Path, checkin_every: int = 10,
@@ -23,12 +20,11 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
 
     state = load_state(project_dir)
     loop_guard = LoopGuard(max_retries=max_retries)
+    build_start_time = time.time()
 
-    print(f"\n{DIVIDER}")
-    print("  FORGE - Autonomous Development Agent")
-    print(f"  Project: {project_dir.name}")
-    print(f"  Dry run: {dry_run}")
-    print(DIVIDER)
+    display.print_forge_header(project_dir.name)
+    if dry_run:
+        print(f"  Mode: dry run")
 
     # -----------------------------------------------------------------------
     # Phase 0: Initial setup
@@ -38,17 +34,26 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
         _initial_setup(project_dir, state, dry_run)
         save_state(project_dir, state)
         if dry_run:
-            _print_dry_run_plan(state)
+            display.print_dry_run_plan(state.phases)
             return
 
     # -----------------------------------------------------------------------
     # Main loop
     # -----------------------------------------------------------------------
+    phase_start_time = time.time()
+
     while not state.is_complete():
         phase = state.current_phase
 
         # Generate tasks for this phase if not done yet
         if not phase.tasks:
+            display.print_phase_header(
+                phase.title,
+                state.current_phase_index,
+                len(state.phases),
+            )
+            phase_start_time = time.time()
+
             print(f"\n[forge] Planning tasks for: {phase.title}")
             tasks = orchestrator.generate_tasks(project_dir, phase, state)
             phase.tasks = tasks
@@ -68,17 +73,14 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
 
         if task is None:
             # All tasks done or parked - review the phase
-            _complete_phase(project_dir, state, phase, loop_guard)
+            _complete_phase(project_dir, state, phase, loop_guard, phase_start_time)
             save_state(project_dir, state)
+            phase_start_time = time.time()
             continue
 
         # Check-in gate
         if state.tasks_since_checkin >= checkin_every:
-            print(f"\n{DIVIDER}")
-            print(f"  CHECK-IN POINT ({checkin_every} tasks completed)")
-            print(f"  Run `forge checkin` to review progress and NEEDS_HUMAN items.")
-            print(f"  Press Enter to continue autonomously, or Ctrl+C to pause.")
-            print(DIVIDER)
+            display.print_checkin_prompt(checkin_every)
             try:
                 input()
             except KeyboardInterrupt:
@@ -88,13 +90,17 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
             save_state(project_dir, state)
 
         # Execute the task
-        _execute_task(project_dir, state, phase, task, loop_guard, dry_run)
+        _execute_task(project_dir, state, phase, task, loop_guard,
+                      max_retries, dry_run)
         save_state(project_dir, state)
 
-    print(f"\n{DIVIDER}")
-    print("  BUILD COMPLETE")
-    print(f"  Total tasks completed: {state.tasks_completed}")
-    print(DIVIDER)
+    build_duration = time.time() - build_start_time
+    display.print_build_complete(
+        project_name=state.project_name or project_dir.name,
+        phases_done=len(state.phases),
+        tasks_done=state.tasks_completed,
+        duration_seconds=build_duration,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -137,10 +143,18 @@ def _initial_setup(project_dir: Path, state: ForgeState, dry_run: bool):
 # ---------------------------------------------------------------------------
 
 def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
-                  task: Task, loop_guard: LoopGuard, dry_run: bool):
-    print(f"\n{DIVIDER}")
-    print(f"  Phase {state.current_phase_index + 1} | Task [{task.id}]: {task.title}")
-    print(DIVIDER)
+                  task: Task, loop_guard: LoopGuard,
+                  max_retries: int, dry_run: bool):
+    task_index = phase.tasks.index(task)
+    total_tasks = len(phase.tasks)
+
+    display.print_task_header(
+        task_title=task.title,
+        task_index=task_index,
+        total_tasks=total_tasks,
+        phase_title=phase.title,
+        retry_count=task.retry_count,
+    )
 
     task.status = TaskStatus.IN_PROGRESS
     save_state(project_dir, state)
@@ -156,7 +170,7 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
     prompt = orchestrator.build_task_prompt(project_dir, phase, task)
 
     # Call Claude Code
-    success, stdout, stderr = builder.run_task(project_dir, prompt)
+    success, stdout, stderr, duration = builder.run_task(project_dir, prompt)
 
     # Run tests
     tests_passed, test_out, test_err = builder.run_tests(project_dir)
@@ -166,8 +180,6 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
         task, test_out, stderr + test_err
     )
 
-    print(f"  [qa] {'PASSED' if qa_passed else 'FAILED'}: {qa_summary[:120]}")
-
     if qa_passed:
         task.status = TaskStatus.DONE
         task.notes = qa_summary
@@ -175,6 +187,18 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
         loop_guard.record_success(task.id)
         state.tasks_completed += 1
         state.tasks_since_checkin += 1
+
+        # Count done tasks in this phase
+        tasks_done_in_phase = sum(
+            1 for t in phase.tasks if t.status == TaskStatus.DONE
+        )
+
+        display.print_task_success(
+            duration_seconds=duration,
+            tasks_done=tasks_done_in_phase,
+            total_tasks=total_tasks,
+            phase_title=phase.title,
+        )
 
         # Commit
         commit_msg = f"[forge] {task.title} ({task.id})"
@@ -192,13 +216,13 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
             task.status = TaskStatus.PARKED
             task.park_reason = reason
             needs_human.append_item(project_dir, task, reason)
-            print(f"  [forge] Task parked after {max_retries_for(task)} failures.")
+            display.print_task_parked(task.id)
         else:
-            print(f"  [forge] Task failed (attempt {task.retry_count}). Will retry.")
-
-
-def max_retries_for(task: Task) -> int:
-    return task.retry_count
+            display.print_task_failure(
+                retry_count=task.retry_count,
+                max_retries=max_retries,
+                reason=qa_summary,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -206,27 +230,47 @@ def max_retries_for(task: Task) -> int:
 # ---------------------------------------------------------------------------
 
 def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
-                    loop_guard: LoopGuard):
-    print(f"\n[forge] All tasks done for: {phase.title}")
-    print("[forge] Running phase QA review...")
+                    loop_guard: LoopGuard, phase_start_time: float):
+    print(f"\n[forge] Running phase QA review...")
 
     approved, notes = orchestrator.evaluate_phase(project_dir, phase)
     phase.qa_notes = notes
     phase.completed_at = _now()
 
+    tasks_done = sum(1 for t in phase.tasks if t.status == TaskStatus.DONE)
+    tasks_parked = sum(1 for t in phase.tasks if t.status == TaskStatus.PARKED)
+    phase_duration = time.time() - phase_start_time
+
+    # Determine next phase title
+    next_index = state.current_phase_index + 1
+    next_phase_title = None
+    if next_index < len(state.phases):
+        next_phase_title = state.phases[next_index].title
+
     if approved:
         phase.status = PhaseStatus.DONE
         git_utils.tag_phase(project_dir, phase.title)
-        print(f"  [forge] Phase approved: {notes[:120]}")
+        display.print_phase_complete(
+            phase_title=phase.title,
+            tasks_done=tasks_done,
+            tasks_parked=tasks_parked,
+            duration_seconds=phase_duration,
+            next_phase_title=next_phase_title,
+        )
         state.advance_phase()
     else:
         phase.status = PhaseStatus.QA_FAILED
         print(f"  [forge] Phase QA failed: {notes[:200]}")
-        # Re-queue any done tasks that are part of blocking issues
-        # by resetting them - simple approach: note it in NEEDS_HUMAN
         needs_human.append_note(
             project_dir,
             f"Phase '{phase.title}' QA failed.\n\nNotes:\n{notes}"
+        )
+        display.print_phase_complete(
+            phase_title=phase.title,
+            tasks_done=tasks_done,
+            tasks_parked=tasks_parked,
+            duration_seconds=phase_duration,
+            next_phase_title=next_phase_title,
         )
         # Advance anyway to avoid infinite loop, but flag it
         state.advance_phase()
@@ -252,16 +296,6 @@ def _validate_project(project_dir: Path):
         sys.exit(1)
     if not (project_dir / "REQUIREMENTS.md").exists():
         print("[forge] WARNING: REQUIREMENTS.md not found. Continuing with VISION.md only.")
-
-
-def _print_dry_run_plan(state: ForgeState):
-    print(f"\n{DIVIDER}")
-    print("  DRY RUN PLAN")
-    print(DIVIDER)
-    for i, phase in enumerate(state.phases):
-        print(f"\nPhase {i+1}: {phase.title}")
-        print(f"  {phase.description[:200]}")
-    print(f"\n{DIVIDER}")
 
 
 def _now() -> str:

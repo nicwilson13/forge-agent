@@ -37,7 +37,38 @@ def _check_sdk_available() -> None:
         sys.exit(1)
 
 
-async def _run_task_async(project_dir: Path, prompt: str) -> Tuple[bool, str, str]:
+def _format_stream_line(message_type: str, content: str) -> str | None:
+    """
+    Format a streaming message for terminal display.
+
+    Args:
+        message_type: Type of message ('text', 'write', 'read', 'run', 'tool', 'error').
+        content: The message content.
+
+    Returns:
+        Formatted line to print, or None if the message should be suppressed.
+    """
+    if not content or not content.strip():
+        return None
+    content = content.strip()
+    if len(content) > 120:
+        content = content[:117] + "..."
+    if message_type == "text":
+        return f"  [claude] {content}"
+    if message_type == "write":
+        return f"  [claude] Writing: {content}"
+    if message_type == "read":
+        return f"  [claude] Reading: {content}"
+    if message_type == "run":
+        return f"  [claude] Running: {content}"
+    if message_type == "tool":
+        return f"  [claude] Tool: {content}"
+    if message_type == "error":
+        return f"  [claude] Error: {content}"
+    return None
+
+
+async def _run_task_async(project_dir: Path, prompt: str) -> Tuple[bool, str, str, float]:
     """
     Execute a single task via the Claude Code SDK async query().
 
@@ -49,7 +80,7 @@ async def _run_task_async(project_dir: Path, prompt: str) -> Tuple[bool, str, st
         prompt: The full task prompt for Claude Code.
 
     Returns:
-        A tuple of (success, full_output, error_message).
+        A tuple of (success, full_output, error_message, duration_seconds).
     """
     from claude_code_sdk import (
         query, ClaudeCodeOptions,
@@ -73,33 +104,34 @@ async def _run_task_async(project_dir: Path, prompt: str) -> Tuple[bool, str, st
                     if isinstance(block, TextBlock):
                         text = block.text.strip()
                         if text:
-                            # Print each line with prefix
                             for line in text.splitlines():
-                                print(f"  [claude] {line}")
+                                formatted = _format_stream_line("text", line)
+                                if formatted:
+                                    print(formatted)
                             output_parts.append(text)
                     elif isinstance(block, ToolUseBlock):
                         tool_name = block.name
                         tool_input = block.input
-                        # Show file operations clearly
                         if tool_name in ("Write", "Edit", "MultiEdit"):
                             file_path = tool_input.get("file_path", "")
                             filename = Path(file_path).name if file_path else "unknown"
-                            print(f"  [claude] Writing: {filename}")
+                            formatted = _format_stream_line("write", filename)
                         elif tool_name == "Read":
                             file_path = tool_input.get("file_path", "")
                             filename = Path(file_path).name if file_path else "unknown"
-                            print(f"  [claude] Reading: {filename}")
+                            formatted = _format_stream_line("read", filename)
                         elif tool_name == "Bash":
                             cmd = tool_input.get("command", "")
-                            print(f"  [claude] Running: {cmd[:80]}")
+                            formatted = _format_stream_line("run", cmd[:80])
                         else:
-                            print(f"  [claude] Tool: {tool_name}")
+                            formatted = _format_stream_line("tool", tool_name)
+                        if formatted:
+                            print(formatted)
                     elif isinstance(block, ToolResultBlock):
                         if block.is_error:
-                            print(f"  [claude] Error in tool result")
-                        else:
-                            # Brief acknowledgment for completed tools
-                            print(f"  [claude] Done.")
+                            formatted = _format_stream_line("error", "tool result failed")
+                            if formatted:
+                                print(formatted)
 
             elif isinstance(message, ResultMessage):
                 elapsed = time.time() - start_time
@@ -109,48 +141,49 @@ async def _run_task_async(project_dir: Path, prompt: str) -> Tuple[bool, str, st
 
                 if message.is_error:
                     error_text = message.result or "Unknown error"
-                    return False, "\n".join(output_parts), error_text
+                    return False, "\n".join(output_parts), error_text, elapsed
 
                 if message.result:
                     output_parts.append(message.result)
 
             elif isinstance(message, SystemMessage):
-                # System messages are metadata, log selectively
                 if message.subtype == "error":
                     error_data = message.data.get("message", str(message.data))
-                    print(f"  [claude] System error: {error_data}")
+                    formatted = _format_stream_line("error", error_data)
+                    if formatted:
+                        print(formatted)
 
+        elapsed = time.time() - start_time
         full_output = "\n".join(output_parts)
-        return True, full_output, ""
+        return True, full_output, "", elapsed
 
     except CLINotFoundError:
         return False, "", (
             "AUTH_ERROR: Claude Code CLI not found. "
             "Install it: https://docs.anthropic.com/en/docs/claude-code"
-        )
+        ), time.time() - start_time
     except CLIConnectionError as e:
-        return False, "", f"CONNECTION_ERROR: {e}"
+        return False, "", f"CONNECTION_ERROR: {e}", time.time() - start_time
     except ProcessError as e:
+        elapsed = time.time() - start_time
         stderr_text = e.stderr or ""
-        # Detect auth errors from stderr content
         if "auth" in stderr_text.lower() or "api key" in stderr_text.lower():
             return False, "", (
                 "AUTH_ERROR: Invalid API credentials. "
                 "Check your ANTHROPIC_API_KEY environment variable."
-            )
-        # Detect rate limits
+            ), elapsed
         if "rate limit" in stderr_text.lower() or "429" in stderr_text:
-            return False, "", f"RATE_LIMIT: {e}"
-        return False, "", f"PROCESS_ERROR: {e}"
+            return False, "", f"RATE_LIMIT: {e}", elapsed
+        return False, "", f"PROCESS_ERROR: {e}", elapsed
     except ClaudeSDKError as e:
-        return False, "", f"SDK_ERROR: {e}"
+        return False, "", f"SDK_ERROR: {e}", time.time() - start_time
     except TimeoutError:
-        return False, "", f"TIMEOUT: Claude Code timed out after {TASK_TIMEOUT}s"
+        return False, "", f"TIMEOUT: Claude Code timed out after {TASK_TIMEOUT}s", time.time() - start_time
     except OSError as e:
-        return False, "", f"CONNECTION_ERROR: {e}"
+        return False, "", f"CONNECTION_ERROR: {e}", time.time() - start_time
 
 
-def run_task(project_dir: Path, prompt: str) -> Tuple[bool, str, str]:
+def run_task(project_dir: Path, prompt: str) -> Tuple[bool, str, str, float]:
     """
     Run a single task via Claude Code SDK with streaming output.
 
@@ -162,12 +195,13 @@ def run_task(project_dir: Path, prompt: str) -> Tuple[bool, str, str]:
         prompt: The full task prompt for Claude Code.
 
     Returns:
-        A tuple of (success, stdout, stderr) where:
+        A tuple of (success, stdout, stderr, duration_seconds) where:
         - success: True if the task completed without errors.
         - stdout: The accumulated text output from Claude.
         - stderr: Error message if failed, empty string if success.
                   Prefixed with error type (AUTH_ERROR, TIMEOUT, etc.)
                   for structured error handling by the caller.
+        - duration_seconds: Elapsed wall-clock time for the task.
     """
     _check_sdk_available()
 

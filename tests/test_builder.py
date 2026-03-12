@@ -15,19 +15,19 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def test_run_task_returns_tuple():
-    """run_task must always return (bool, str, str)."""
+    """run_task must always return (bool, str, str, float)."""
     from forge.builder import run_task
 
-    # Mock anyio.from_thread.run to return a pre-built result
-    with patch("anyio.run", return_value=(True, "output", "")):
+    with patch("anyio.run", return_value=(True, "output", "", 1.5)):
         result = run_task(Path("/tmp/fake"), "do something")
 
         assert isinstance(result, tuple)
-        assert len(result) == 3
-        success, stdout, stderr = result
+        assert len(result) == 4
+        success, stdout, stderr, duration = result
         assert isinstance(success, bool)
         assert isinstance(stdout, str)
         assert isinstance(stderr, str)
+        assert isinstance(duration, float)
 
 
 # ---------------------------------------------------------------------------
@@ -117,12 +117,13 @@ def test_run_task_success_flow():
     """run_task returns success when SDK query completes without error."""
     from forge.builder import run_task
 
-    with patch("anyio.run", return_value=(True, "Task complete.", "")):
-        success, stdout, stderr = run_task(Path("/tmp/fake"), "build a thing")
+    with patch("anyio.run", return_value=(True, "Task complete.", "", 2.0)):
+        success, stdout, stderr, duration = run_task(Path("/tmp/fake"), "build a thing")
 
         assert success is True
         assert stdout == "Task complete."
         assert stderr == ""
+        assert duration == 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -133,8 +134,9 @@ def test_run_task_error_flow():
     """run_task returns structured error on SDK failure."""
     from forge.builder import run_task
 
-    with patch("anyio.run", return_value=(False, "", "PROCESS_ERROR: exit code 1")):
-        success, stdout, stderr = run_task(Path("/tmp/fake"), "failing task")
+    with patch("anyio.run", return_value=(False, "", "PROCESS_ERROR: exit code 1", 5.0)):
+        success, stdout, stderr, duration = run_task(Path("/tmp/fake"), "failing task")
 
         assert success is False
         assert "PROCESS_ERROR" in stderr
+        assert duration == 5.0
