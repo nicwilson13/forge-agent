@@ -865,6 +865,42 @@ def _offer_sentry_setup(project_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Optional Ollama local LLM setup
+# ---------------------------------------------------------------------------
+
+def _offer_ollama_setup(project_dir: Path) -> None:
+    """
+    Offer optional Ollama local LLM setup at end of interview.
+
+    If the user enters a model name, writes .forge/ollama.json with defaults.
+    Press Enter to skip.
+    """
+    from forge.ollama_integration import OllamaConfig, save_ollama_config
+
+    print("\n  Would you like to use Ollama for local LLM inference?")
+    print("  Forge can route planning tasks to a local model to reduce API costs.")
+    print("  Requires Ollama running at localhost:11434. Press Enter to skip.")
+    print("  Enter Ollama model name (e.g. llama3.1:8b, mistral, codestral):")
+
+    try:
+        answer = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if not answer:
+        return
+
+    config = OllamaConfig(
+        enabled=True,
+        model=answer,
+    )
+    save_ollama_config(project_dir, config)
+    print(f"  {SYM_OK} Wrote .forge/ollama.json for model {answer}")
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -948,6 +984,9 @@ def run_new(project_dir: Path, description: Optional[str] = None) -> None:
 
     # Optional Sentry integration setup
     _offer_sentry_setup(project_dir)
+
+    # Optional Ollama local LLM setup
+    _offer_ollama_setup(project_dir)
 
     # Create .forge dir
     forge_dir = project_dir / ".forge"

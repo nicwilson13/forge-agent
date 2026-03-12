@@ -67,7 +67,9 @@ class TokenUsage:
 
     @property
     def estimated_cost(self) -> float:
-        """Return estimated cost in USD."""
+        """Return estimated cost in USD. Local models (ollama:*) are free."""
+        if self.model.startswith("ollama:"):
+            return 0.0
         pricing = PRICING.get(self.model, PRICING[MODEL_OPUS])
         input_cost = self.input_tokens / 1_000_000 * pricing["input"]
         output_cost = self.output_tokens / 1_000_000 * pricing["output"]

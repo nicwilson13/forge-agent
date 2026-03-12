@@ -635,6 +635,46 @@ def _check_sentry_config(project_dir: Path) -> CheckResult | None:
 
 
 # ---------------------------------------------------------------------------
+# Ollama config check
+# ---------------------------------------------------------------------------
+
+def _check_ollama_config(project_dir: Path) -> CheckResult | None:
+    """
+    Check .forge/ollama.json if present.
+
+    Returns None if not configured (optional).
+    Calls is_ollama_reachable() - PASS if reachable, FAIL if not.
+    Includes model name in message.
+    """
+    ollama_path = project_dir / ".forge" / "ollama.json"
+    if not ollama_path.exists():
+        return None
+
+    from forge.ollama_integration import load_ollama_config, is_ollama_reachable
+
+    config = load_ollama_config(project_dir)
+    if not config.enabled:
+        return CheckResult(
+            "Ollama", CheckStatus.WARN,
+            "ollama.json exists but integration is disabled",
+            'Set "enabled": true in .forge/ollama.json to activate'
+        )
+
+    if is_ollama_reachable(config):
+        return CheckResult(
+            "Ollama", CheckStatus.PASS,
+            f"{config.model} reachable at {config.host}"
+        )
+
+    return CheckResult(
+        "Ollama", CheckStatus.FAIL,
+        f"cannot reach {config.host} - is Ollama running?",
+        f"Start Ollama and ensure {config.model} is pulled:\n"
+        f"     ollama pull {config.model}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # CI workflow check
 # ---------------------------------------------------------------------------
 
@@ -822,6 +862,11 @@ def run_doctor(project_dir: Path) -> None:
     sentry_result = _check_sentry_config(project_dir)
     if sentry_result is not None:
         results.append(sentry_result)
+
+    # Ollama config check (optional - only when .forge/ollama.json exists)
+    ollama_result = _check_ollama_config(project_dir)
+    if ollama_result is not None:
+        results.append(ollama_result)
 
     # CI workflow check (optional - only when ci.yml exists)
     ci_result = _check_github_workflow(project_dir)

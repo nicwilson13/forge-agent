@@ -74,7 +74,26 @@ def _classify_anthropic_error(exc: Exception) -> tuple[str, bool, str]:
 
 def _chat(system: str, user: str, max_tokens: int = 4096,
           model: str = MODEL_OPUS,
-          mcp_servers: list[dict] | None = None) -> tuple[str, TokenUsage]:
+          mcp_servers: list[dict] | None = None,
+          project_dir: Path | None = None,
+          operation: str = "") -> tuple[str, TokenUsage]:
+    # Check Ollama routing
+    if project_dir and operation:
+        from forge.ollama_integration import (
+            load_ollama_config, should_use_ollama,
+            ollama_chat_with_token_estimate, is_ollama_reachable,
+        )
+        ollama_config = load_ollama_config(project_dir)
+        if should_use_ollama(ollama_config, operation):
+            if is_ollama_reachable(ollama_config):
+                messages = [{"role": "user", "content": user}]
+                response, usage = ollama_chat_with_token_estimate(
+                    ollama_config, messages, system,
+                )
+                if response is not None:
+                    return response, usage
+                # Fall through to Anthropic on Ollama failure
+
     last_error_str = ""
     last_prefix = "UNKNOWN"
 
@@ -129,11 +148,14 @@ def _chat(system: str, user: str, max_tokens: int = 4096,
 
 def _json_chat(system: str, user: str, max_tokens: int = 4096,
                model: str = MODEL_OPUS,
-               mcp_servers: list[dict] | None = None) -> tuple[dict | list, TokenUsage]:
+               mcp_servers: list[dict] | None = None,
+               project_dir: Path | None = None,
+               operation: str = "") -> tuple[dict | list, TokenUsage]:
     """Call API and parse JSON from the response. Returns (parsed_json, usage)."""
     system_with_json = system + "\n\nYou MUST respond with valid JSON only. No prose, no markdown fences."
     raw, usage = _chat(system_with_json, user, max_tokens, model=model,
-                       mcp_servers=mcp_servers)
+                       mcp_servers=mcp_servers,
+                       project_dir=project_dir, operation=operation)
     # Strip accidental markdown fences
     raw = raw.strip()
     if raw.startswith("```"):
@@ -189,7 +211,9 @@ CLAUDE.md (constraints + preferences):
 """
     mcp_servers = mcp_config.to_api_format("task_generation") if mcp_config else None
     raw_phases, usage = _json_chat(PHASE_SYSTEM, user, model=model,
-                                   mcp_servers=mcp_servers or None)
+                                   mcp_servers=mcp_servers or None,
+                                   project_dir=project_dir,
+                                   operation="generate_phases")
     return [Phase.new(p["title"], p["description"]) for p in raw_phases], usage
 
 
@@ -286,7 +310,9 @@ Description: {phase.description}
 """
     mcp_servers = mcp_config.to_api_format("task_generation") if mcp_config else None
     raw_tasks, usage = _json_chat(TASK_SYSTEM, user, model=model,
-                                  mcp_servers=mcp_servers or None)
+                                  mcp_servers=mcp_servers or None,
+                                  project_dir=project_dir,
+                                  operation="generate_tasks")
     tasks = []
     # Map API-generated IDs (e.g. t_01) to real UUIDs
     id_map: dict[str, str] = {}
@@ -356,7 +382,9 @@ Planned phases:
 """
     mcp_servers = mcp_config.to_api_format("architecture") if mcp_config else None
     arch_content, usage = _chat(ARCH_SYSTEM, user, model=model,
-                                mcp_servers=mcp_servers or None)
+                                mcp_servers=mcp_servers or None,
+                                project_dir=project_dir,
+                                operation="write_architecture")
     arch_path = project_dir / "ARCHITECTURE.md"
     arch_path.write_text(arch_content)
     print(f"  [forge] Wrote ARCHITECTURE.md")
@@ -590,7 +618,8 @@ Return JSON:
 
 
 def evaluate_qa(task: Task, test_output: str, error_output: str,
-                mcp_config=None) -> Tuple[bool, str, str, TokenUsage]:
+                mcp_config=None,
+                project_dir: Path | None = None) -> Tuple[bool, str, str, TokenUsage]:
     model = route_orchestrator("evaluate_qa")
     log_route("evaluate_qa", model, "high stakes")
 
@@ -606,7 +635,9 @@ Errors:
 """
     mcp_servers = mcp_config.to_api_format("qa_evaluation") if mcp_config else None
     result, usage = _json_chat(QA_EVAL_SYSTEM, user, model=model,
-                               mcp_servers=mcp_servers or None)
+                               mcp_servers=mcp_servers or None,
+                               project_dir=project_dir,
+                               operation="evaluate_qa")
     passed = result.get("passed", False)
     summary = result.get("summary", "")
     retry_prompt = result.get("retry_prompt") or ""
@@ -679,7 +710,9 @@ Architecture:
 {e2e_section}{security_section}"""
     mcp_servers = mcp_config.to_api_format("phase_evaluation") if mcp_config else None
     result, usage = _json_chat(PHASE_QA_SYSTEM, user, model=model,
-                               mcp_servers=mcp_servers or None)
+                               mcp_servers=mcp_servers or None,
+                               project_dir=project_dir,
+                               operation="evaluate_phase")
     approved = result.get("approved", False)
     notes = result.get("notes", "")
     if result.get("blocking_issues"):

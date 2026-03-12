@@ -117,14 +117,17 @@ def escalate_model(current_model: str) -> str | None:
 
 def log_route(operation: str, model: str, reason: str) -> None:
     """
-    Print a routing log line to stdout.
+    Print a routing log line to stdout. Marks local models.
 
     Only prints if stdout is a tty or FORGE_VERBOSE env var is set.
     """
     if not (sys.stdout.isatty() or os.environ.get("FORGE_VERBOSE")):
         return
     short = _model_short(model)
-    print(f"  [route] {operation:<24} {SYM_ARROW} {short:<8}  ({reason})")
+    if model.startswith("ollama:"):
+        print(f"  [route] {operation:<24} {SYM_ARROW} {short:<8}  (local)")
+    else:
+        print(f"  [route] {operation:<24} {SYM_ARROW} {short:<8}  ({reason})")
 
 
 def _model_short(model: str) -> str:
@@ -135,4 +138,6 @@ def _model_short(model: str) -> str:
         return "sonnet"
     if model == MODEL_OPUS:
         return "opus"
+    if model.startswith("ollama:"):
+        return model
     return model
