@@ -15,6 +15,7 @@ from typing import List, Tuple
 
 import anthropic
 
+from forge.context_budget import ContextBudget, ContentBlock, DEFAULT_BUDGET, estimate_tokens
 from forge.retry import (
     FatalAPIError,
     RetryExhaustedError,
@@ -26,6 +27,7 @@ from forge.state import Phase, Task, ForgeState
 _CLIENT = None
 
 MAX_RETRIES = 5   # max retry attempts for any single API call
+DEFAULT_PROMPT_BUDGET = DEFAULT_BUDGET  # tokens for task prompts
 
 
 def _client() -> anthropic.Anthropic:
@@ -323,16 +325,35 @@ Previous task notes (if any): {notes}
 
 
 def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
+    """Build the task execution prompt with intelligent context budgeting."""
     vision = _read_doc(project_dir, "VISION.md")
     arch = _read_doc(project_dir, "ARCHITECTURE.md")
     claude_md = _read_doc(project_dir, "CLAUDE.md")
 
+    # Build non-negotiable task context (never truncated)
+    task_context = (
+        f"CURRENT PHASE: {phase.title}\n{phase.description}\n\n"
+        f"YOUR TASK:\n{task.title}\n{task.description}"
+    )
+    notes_context = f"Previous task notes: {task.notes or 'None'}"
+
+    # Allocate budget across all content blocks
+    budget = ContextBudget(max_tokens=DEFAULT_PROMPT_BUDGET)
+    budget.add(ContentBlock("task", task_context, priority=1, truncatable=False))
+    budget.add(ContentBlock("notes", notes_context, priority=2, truncatable=False))
+    budget.add(ContentBlock("arch", arch, priority=3, truncatable=True))
+    budget.add(ContentBlock("claude", claude_md, priority=4, truncatable=True))
+    budget.add(ContentBlock("vision", vision, priority=6, truncatable=True))
+    budget.add(ContentBlock("skills", "", priority=7, truncatable=True))
+
+    allocated = budget.allocate()
+
     return BUILDER_SYSTEM_TEMPLATE.format(
-        vision=vision[:2000],
-        arch=arch[:2000],
-        claude_md=claude_md[:1500],
+        vision=allocated["vision"],
+        arch=allocated["arch"],
+        claude_md=allocated["claude"],
         phase_title=phase.title,
-        phase_desc=phase.description[:500],
+        phase_desc=phase.description,
         task_title=task.title,
         task_desc=task.description,
         notes=task.notes or "None",
@@ -402,6 +423,13 @@ def evaluate_phase(project_dir: Path, phase: Phase) -> Tuple[bool, str]:
     task_summary = "\n".join(f"- {t.title}: {t.notes or 'completed'}" for t in done_tasks)
     arch = _read_doc(project_dir, "ARCHITECTURE.md")
 
+    # Budget-aware truncation for architecture in phase review
+    budget = ContextBudget(max_tokens=DEFAULT_PROMPT_BUDGET)
+    budget.add(ContentBlock("phase", f"{phase.title}\n{phase.description}\n{task_summary}",
+                            priority=1, truncatable=False))
+    budget.add(ContentBlock("arch", arch, priority=3, truncatable=True))
+    allocated = budget.allocate()
+
     user = f"""
 Phase: {phase.title}
 Phase goal: {phase.description}
@@ -410,7 +438,7 @@ Completed tasks:
 {task_summary}
 
 Architecture:
-{arch[:1500]}
+{allocated["arch"]}
 """
     result = _json_chat(PHASE_QA_SYSTEM, user)
     approved = result.get("approved", False)
