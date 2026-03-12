@@ -372,6 +372,8 @@ CODING STANDARDS (from CLAUDE.md):
 
 {memory_section}
 
+{skills_section}
+
 CURRENT PHASE: {phase_title}
 {phase_desc}
 
@@ -421,15 +423,64 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
         budget.add(ContentBlock("memory", memory, priority=5, truncatable=True))
 
     budget.add(ContentBlock("vision", vision, priority=6, truncatable=True))
-    budget.add(ContentBlock("skills", "", priority=7, truncatable=True))
+    # Skill injection based on task content signals
+    task_text = f"{task.title} {task.description}".lower()
+
+    FRONTEND_SIGNALS = [
+        "frontend", "ui", "ux", "component", "css", "tailwind", "react",
+        "next.js", "nextjs", "vue", "svelte", "html", "responsive",
+        "layout", "design", "style", "animation", "page", "modal",
+        "form", "button", "navigation", "sidebar", "header", "footer",
+    ]
+
+    DATABASE_SIGNALS = [
+        "database", "schema", "migration", "table", "query", "sql",
+        "postgres", "supabase", "drizzle", "prisma", "orm", "seed",
+        "redis", "mongodb", "sqlite", "mysql", "index", "relation",
+        "transaction", "foreign key", "column", "postgresql", "typeorm",
+        "sequelize", "mongoose", "fixture",
+    ]
+
+    skills_dir = Path(__file__).parent / "skills"
+
+    if any(sig in task_text for sig in FRONTEND_SIGNALS):
+        fe_skill_path = skills_dir / "frontend-design.md"
+        if fe_skill_path.exists():
+            fe_skill = fe_skill_path.read_text()
+            budget.add(ContentBlock(
+                name="frontend_skill",
+                content=fe_skill,
+                priority=7,
+                truncatable=True,
+            ))
+
+    if any(sig in task_text for sig in DATABASE_SIGNALS):
+        db_skill_path = skills_dir / "database.md"
+        if db_skill_path.exists():
+            db_skill = db_skill_path.read_text()
+            budget.add(ContentBlock(
+                name="database_skill",
+                content=db_skill,
+                priority=7,
+                truncatable=True,
+            ))
 
     allocated = budget.allocate()
+
+    # Collect injected skill content
+    skill_parts = []
+    for key in ("frontend_skill", "database_skill"):
+        content = allocated.get(key, "")
+        if content:
+            skill_parts.append(content)
+    skills_section = "\n\n".join(skill_parts) if skill_parts else ""
 
     return BUILDER_SYSTEM_TEMPLATE.format(
         vision=allocated["vision"],
         arch=allocated["arch"],
         claude_md=allocated["claude"],
         memory_section=allocated.get("memory", ""),
+        skills_section=skills_section,
         phase_title=phase.title,
         phase_desc=phase.description,
         task_title=task.title,
