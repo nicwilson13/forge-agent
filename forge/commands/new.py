@@ -17,6 +17,11 @@ from typing import Optional
 
 import anthropic
 
+from forge.advanced_options import (
+    collect_advanced_options,
+    advanced_options_to_context,
+    advanced_options_to_claude_md_section,
+)
 from forge.display import SYM_OK, SYM_WARN, divider
 
 
@@ -243,6 +248,11 @@ def _conduct_interview(description: str, profile: dict | None = None) -> dict:
         result[f"a{i}"] = answer
         print()
 
+    # Advanced options block
+    print()
+    advanced = collect_advanced_options()
+    result["advanced"] = advanced
+
     return result
 
 
@@ -274,6 +284,11 @@ def _build_interview_context(answers: dict, profile: dict | None = None) -> str:
         a = answers.get(f"a{i}", "")
         lines.append(f"Q{i}: {q}")
         lines.append(f"A{i}: {a}\n")
+
+    advanced = answers.get("advanced", {})
+    if advanced:
+        lines.append(advanced_options_to_context(advanced))
+
     return "\n".join(lines)
 
 
@@ -387,6 +402,19 @@ def _generate_docs(project_dir: Path, description: str, answers: dict,
         print(f"\n  [forge] ERROR: Failed to generate CLAUDE.md: {e}")
         print("  Please check your ANTHROPIC_API_KEY and try again.")
         sys.exit(1)
+
+    # Insert ## Project Configuration section into CLAUDE.md if advanced options answered
+    config_section = advanced_options_to_claude_md_section(answers.get("advanced", {}))
+    if config_section:
+        claude_content = generated["CLAUDE.md"]
+        insert_idx = claude_content.find("\n## ")
+        if insert_idx != -1:
+            generated["CLAUDE.md"] = (
+                claude_content[:insert_idx] + "\n\n" + config_section +
+                claude_content[insert_idx:]
+            )
+        else:
+            generated["CLAUDE.md"] = claude_content + "\n\n" + config_section
 
     # Write atomically: temp file then rename
     for filename, content in generated.items():
