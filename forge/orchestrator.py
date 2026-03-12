@@ -451,7 +451,9 @@ Return JSON:
 """
 
 
-def evaluate_phase(project_dir: Path, phase: Phase) -> Tuple[bool, str, TokenUsage]:
+def evaluate_phase(project_dir: Path, phase: Phase,
+                   e2e_passed: bool | None = None,
+                   e2e_summary: str = "") -> Tuple[bool, str, TokenUsage]:
     model = route_orchestrator("evaluate_phase")
     log_route("evaluate_phase", model, "moderate")
 
@@ -466,6 +468,12 @@ def evaluate_phase(project_dir: Path, phase: Phase) -> Tuple[bool, str, TokenUsa
     budget.add(ContentBlock("arch", arch, priority=3, truncatable=True))
     allocated = budget.allocate()
 
+    # Include E2E results when available
+    e2e_section = ""
+    if e2e_passed is not None:
+        e2e_status = "PASSED" if e2e_passed else "FAILED"
+        e2e_section = f"\nE2E Test Results: {e2e_status}\n{e2e_summary[:500]}\n"
+
     user = f"""
 Phase: {phase.title}
 Phase goal: {phase.description}
@@ -475,7 +483,7 @@ Completed tasks:
 
 Architecture:
 {allocated["arch"]}
-"""
+{e2e_section}"""
     result, usage = _json_chat(PHASE_QA_SYSTEM, user, model=model)
     approved = result.get("approved", False)
     notes = result.get("notes", "")

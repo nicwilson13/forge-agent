@@ -547,10 +547,56 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
                     loop_guard: LoopGuard, phase_start_time: float,
                     tracker: CostTracker | None = None,
                     logger: BuildLogger | None = None):
+    # Run E2E tests before phase QA evaluation
+    from forge.e2e_generator import (
+        should_generate_e2e, generate_e2e_tests,
+        run_e2e_tests, e2e_failure_context,
+    )
+    from forge.visual_qa import is_playwright_available
+
+    e2e_passed = None
+    e2e_summary = ""
+    phase_index = state.current_phase_index
+
+    if is_playwright_available() and should_generate_e2e(phase.title, phase.tasks):
+        print(f"\n  [forge] Generating E2E tests for {phase.title}...")
+        try:
+            test_file, gen_summary = generate_e2e_tests(project_dir, phase)
+            if test_file:
+                print(f"  {display.SYM_OK} Generated E2E tests: {gen_summary[:120]}")
+                e2e_passed, e2e_output, failed = run_e2e_tests(
+                    project_dir, test_file
+                )
+                if e2e_passed:
+                    print(f"  {display.SYM_OK} E2E tests passed")
+                    if logger:
+                        logger.log("e2e_passed", phase=phase_index,
+                                   summary=gen_summary[:100])
+                else:
+                    failed_str = ", ".join(failed[:3]) if failed else "unknown"
+                    print(f"  {display.SYM_FAIL} E2E tests failed: {failed_str}")
+                    if logger:
+                        logger.log("e2e_failed", phase=phase_index,
+                                   failed_tests=failed[:5])
+                    e2e_summary = e2e_failure_context(test_file, failed, e2e_output)
+            else:
+                print(f"  (E2E generation skipped - {gen_summary})")
+        except (FatalAPIError, RetryExhaustedError):
+            raise
+        except Exception as e:
+            print(f"  (E2E tests skipped - unexpected error: {e})")
+    else:
+        if not is_playwright_available():
+            print("  (E2E tests skipped - playwright not available)")
+
     print(f"\n[forge] Running phase QA review...")
 
     try:
-        approved, notes, _ = orchestrator.evaluate_phase(project_dir, phase)
+        approved, notes, _ = orchestrator.evaluate_phase(
+            project_dir, phase,
+            e2e_passed=e2e_passed,
+            e2e_summary=e2e_summary,
+        )
     except FatalAPIError as e:
         _handle_fatal_error(project_dir, state, None, e, logger)
     except RetryExhaustedError as e:
