@@ -339,6 +339,24 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
     print()
     print(f"  {format_health_summary_line(report)}")
 
+    # Save build record for history view
+    try:
+        from forge.history_view import save_build_record
+        _last_vercel = ""
+        _last_pr = ""
+        for p in reversed(state.phases):
+            if not _last_vercel and getattr(p, "vercel_deployment_url", ""):
+                _last_vercel = p.vercel_deployment_url
+            if not _last_pr and getattr(p, "github_pr", None):
+                _last_pr = str(p.github_pr)
+        save_build_record(
+            project_dir, state, report.grade,
+            tracker.session_total_cost(), int(build_duration),
+            vercel_url=_last_vercel, github_pr=_last_pr,
+        )
+    except Exception:
+        pass
+
     # Final dashboard update and stop
     update_dashboard_state({
         "health": report.grade,

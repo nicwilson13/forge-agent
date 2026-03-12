@@ -16,6 +16,8 @@ import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
+from forge.nav_shell import page_shell
+
 
 # ---------------------------------------------------------------------------
 # Global state (shared across threads)
@@ -116,6 +118,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif self.path == "/tasks/data":
             from forge.tasks_view import handle_tasks_data
             handle_tasks_data(self, _project_dir)
+        elif self.path == "/history":
+            from forge.history_view import handle_history_get
+            handle_history_get(self)
+        elif self.path == "/history/data":
+            from forge.history_view import handle_history_data
+            handle_history_data(self, _project_dir)
+        elif self.path.startswith("/history/build/"):
+            from forge.history_view import handle_history_build
+            idx = self.path.split("/history/build/")[1]
+            handle_history_build(self, _project_dir, idx)
+        elif self.path == "/integrations":
+            from forge.integrations_view import handle_integrations_get
+            handle_integrations_get(self)
+        elif self.path == "/integrations/data":
+            from forge.integrations_view import handle_integrations_data
+            handle_integrations_data(self, _project_dir)
+        elif self.path == "/linear":
+            from forge.linear_view import handle_linear_get
+            handle_linear_get(self)
+        elif self.path == "/linear/data":
+            from forge.linear_view import handle_linear_data
+            handle_linear_data(self, _project_dir)
         else:
             self.send_response(404)
             self.end_headers()
@@ -132,6 +156,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif self.path == "/tasks/resolve":
             from forge.tasks_view import handle_tasks_resolve
             handle_tasks_resolve(self, body, _project_dir)
+        elif self.path == "/integrations/save":
+            from forge.integrations_view import handle_integrations_save
+            handle_integrations_save(self, body, _project_dir)
+        elif self.path.startswith("/integrations/test/"):
+            from forge.integrations_view import handle_integrations_test
+            name = self.path.split("/integrations/test/")[1]
+            handle_integrations_test(self, _project_dir, name)
+        elif self.path == "/linear/sync":
+            from forge.linear_view import handle_linear_sync
+            handle_linear_sync(self, body, _project_dir)
         else:
             self.send_response(404)
             self.end_headers()
@@ -271,29 +305,8 @@ def stop_dashboard() -> None:
 # HTML Dashboard
 # ---------------------------------------------------------------------------
 
-INDEX_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Forge Dashboard</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap');
-  body { font-family: 'JetBrains Mono', monospace; background: #0f0f0f; color: #e5e5e5; }
-  ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { background: #1a1a1a; }
-  ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
-</style>
-</head>
-<body class="min-h-screen p-6">
-<nav style="position:fixed;top:0;left:0;right:0;height:40px;background:#1a1a1a;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;padding:0 16px;gap:24px;z-index:50;font-family:'JetBrains Mono',monospace">
-  <span style="color:#00e5a0;font-weight:700;font-size:14px">forge</span>
-  <a href="/" style="font-size:13px;color:#999;text-decoration:none" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#999'">Build</a>
-  <a href="/tasks" style="font-size:13px;color:#999;text-decoration:none" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#999'">Tasks <span id="nav-task-badge" style="display:none;background:#00e5a0;color:#0f0f0f;font-size:11px;padding:1px 6px;border-radius:8px;margin-left:4px">0</span></a>
-  <a href="/setup" style="font-size:13px;color:#999;text-decoration:none" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#999'">Setup</a>
-</nav>
-<div class="max-w-3xl mx-auto space-y-4" style="padding-top:48px">
+_DASHBOARD_CONTENT = """
+<div class="max-w-3xl mx-auto space-y-4" style="padding-top:56px;padding-left:16px;padding-right:16px">
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-3 rounded-lg" style="background:#1a1a1a;border:1px solid #2a2a2a">
     <div class="flex items-center gap-3">
@@ -359,7 +372,9 @@ INDEX_HTML = """<!DOCTYPE html>
     </div>
   </div>
 </div>
+"""
 
+_DASHBOARD_SCRIPTS = """
 <script>
 const $ = id => document.getElementById(id);
 let connected = false;
@@ -442,5 +457,6 @@ fetch('/state').then(r=>r.json()).then(updateState).catch(()=>{});
 fetch('/log').then(r=>r.json()).then(entries=>entries.forEach(appendLog)).catch(()=>{});
 connect();
 </script>
-</body>
-</html>"""
+"""
+
+INDEX_HTML = page_shell("Build", "/", _DASHBOARD_CONTENT, extra_scripts=_DASHBOARD_SCRIPTS)

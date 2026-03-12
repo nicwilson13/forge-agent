@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from forge.nav_shell import page_shell
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -339,20 +341,8 @@ def handle_setup_status(handler, project_dir: Path) -> None:
 # Setup Wizard HTML
 # ---------------------------------------------------------------------------
 
-SETUP_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Forge - Project Setup</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+_SETUP_HEAD = """
 <style>
-  * { font-family: 'JetBrains Mono', monospace; }
-  body { background: #0f0f0f; color: #e5e5e5; }
-  ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { background: #1a1a1a; }
-  ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
   .forge-green { color: #00e5a0; }
   .forge-green-bg { background: #00e5a0; }
   .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; }
@@ -422,14 +412,9 @@ SETUP_HTML = """<!DOCTYPE html>
     vertical-align: middle; margin-right: 8px;
   }
 </style>
-</head>
-<body>
-<nav style="position:fixed;top:0;left:0;right:0;height:40px;background:#1a1a1a;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;padding:0 16px;gap:24px;z-index:50;font-family:'JetBrains Mono',monospace">
-  <span style="color:#00e5a0;font-weight:700;font-size:14px">forge</span>
-  <a href="/" style="font-size:13px;color:#999;text-decoration:none" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#999'">Build</a>
-  <a href="/tasks" style="font-size:13px;color:#999;text-decoration:none" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#999'">Tasks <span id="nav-task-badge" style="display:none;background:#00e5a0;color:#0f0f0f;font-size:11px;padding:1px 6px;border-radius:8px;margin-left:4px">0</span></a>
-  <a href="/setup" style="font-size:13px;color:#999;text-decoration:none" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#999'">Setup</a>
-</nav>
+"""
+
+_SETUP_CONTENT = """
 <div class="max-w-2xl mx-auto px-6 pt-16 pb-12">
 
   <!-- Header -->
@@ -710,7 +695,9 @@ SETUP_HTML = """<!DOCTYPE html>
   </div>
 
 </div>
+"""
 
+_SETUP_SCRIPTS = """
 <script>
 // State
 let currentStep = 1;
@@ -898,6 +885,6 @@ async function startBuilding() {
   }
 }
 </script>
-</body>
-</html>
 """
+
+SETUP_HTML = page_shell("Setup", "/setup", _SETUP_CONTENT, extra_head=_SETUP_HEAD, extra_scripts=_SETUP_SCRIPTS)

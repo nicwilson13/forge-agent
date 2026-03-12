@@ -12,6 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from forge.nav_shell import page_shell
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -179,35 +181,11 @@ def handle_tasks_resolve(handler, body: bytes, project_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Nav bar HTML (shared across views)
-# ---------------------------------------------------------------------------
-
-NAV_HTML = """<nav style="position:fixed;top:0;left:0;right:0;height:40px;background:#1a1a1a;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;padding:0 16px;gap:24px;z-index:50;font-family:'JetBrains Mono',monospace">
-  <span style="color:#00e5a0;font-weight:700;font-size:14px">forge</span>
-  <a href="/" style="font-size:13px;color:#999;text-decoration:none" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#999'">Build</a>
-  <a href="/tasks" style="font-size:13px;color:#999;text-decoration:none" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#999'">Tasks <span id="nav-task-badge" style="display:none;background:#00e5a0;color:#0f0f0f;font-size:11px;padding:1px 6px;border-radius:8px;margin-left:4px">0</span></a>
-  <a href="/setup" style="font-size:13px;color:#999;text-decoration:none" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#999'">Setup</a>
-</nav>"""
-
-
-# ---------------------------------------------------------------------------
 # Tasks HTML
 # ---------------------------------------------------------------------------
 
-TASKS_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Forge - Tasks</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+_TASKS_HEAD = """
 <style>
-  * { font-family: 'JetBrains Mono', monospace; }
-  body { background: #0f0f0f; color: #e5e5e5; }
-  ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { background: #1a1a1a; }
-  ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
   .forge-green { color: #00e5a0; }
   .card {
     background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px;
@@ -217,20 +195,21 @@ TASKS_HTML = """<!DOCTYPE html>
     background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 6px;
     color: #e5e5e5; padding: 10px 14px; width: 100%; outline: none;
     transition: border-color 0.2s; resize: vertical; min-height: 80px;
+    font-family: inherit;
   }
   .input-field:focus { border-color: #00e5a0; }
   .input-field::placeholder { color: #555; }
   .btn-primary {
     background: #00e5a0; color: #0f0f0f; font-weight: 600;
     padding: 8px 20px; border-radius: 6px; border: none; cursor: pointer;
-    font-size: 13px; transition: opacity 0.2s;
+    font-size: 13px; transition: opacity 0.2s; font-family: inherit;
   }
   .btn-primary:hover { opacity: 0.9; }
   .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn-secondary {
     background: #2a2a2a; color: #e5e5e5; font-weight: 600;
     padding: 8px 20px; border-radius: 6px; border: 1px solid #333;
-    cursor: pointer; font-size: 13px; transition: opacity 0.2s;
+    cursor: pointer; font-size: 13px; transition: opacity 0.2s; font-family: inherit;
   }
   .btn-secondary:hover { opacity: 0.8; }
   .task-resolved { opacity: 0.5; border-color: #00e5a0; }
@@ -242,11 +221,9 @@ TASKS_HTML = """<!DOCTYPE html>
     vertical-align: middle; margin-right: 6px;
   }
 </style>
-</head>
-<body>
+"""
 
-""" + NAV_HTML + """
-
+_TASKS_CONTENT = """
 <div class="max-w-3xl mx-auto px-6 pt-16 pb-12">
 
   <!-- Header -->
@@ -282,7 +259,9 @@ TASKS_HTML = """<!DOCTYPE html>
   </div>
 
 </div>
+"""
 
+_TASKS_SCRIPTS = """
 <script>
 let resolvedCount = 0;
 
@@ -459,6 +438,6 @@ function connectSSE() {
 loadTasks();
 connectSSE();
 </script>
-</body>
-</html>
 """
+
+TASKS_HTML = page_shell("Tasks", "/tasks", _TASKS_CONTENT, extra_head=_TASKS_HEAD, extra_scripts=_TASKS_SCRIPTS)

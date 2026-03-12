@@ -6,7 +6,17 @@
       "Bash(git commit:*)",
       "Bash(git branch:*)",
       "Bash(git remote:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(pip install:*)",
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -m pytest tests/test_profile.py -v)",
+      "Bash(forge --help)",
+      "Bash(python -c \"from forge.retry import with_retry, FatalAPIError, RetryExhaustedError; print\\(''retry OK''\\)\")",
+      "Bash(python -c \"from forge.orchestrator import _chat; print\\(''orchestrator OK''\\)\")",
+      "Bash(python -c \":*)",
+      "Bash(python -m forge doctor)",
+      "Bash(forge doctor:*)",
+      "Bash(python -c \"from forge.commands.doctor import run_doctor; run_doctor\\(''.''\\)\")"
     ]
   }
 }
