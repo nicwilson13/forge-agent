@@ -2,6 +2,7 @@
 """
 Forge - Autonomous AI Development Agent
 Usage:
+  forge profile           - Manage your global tool preferences
   forge new [description] - Generate project docs via guided interview
   forge init              - Initialize project templates
   forge run               - Start autonomous build loop
@@ -25,6 +26,27 @@ def main():
     )
     parser.add_argument("--project-dir", default=".", help="Target project directory (default: cwd)")
     subparsers = parser.add_subparsers(dest="command")
+
+    # forge profile
+    profile_p = subparsers.add_parser(
+        "profile",
+        help="Manage your global tool preferences for new projects",
+    )
+    profile_p.add_argument(
+        "--show",
+        action="store_true",
+        help="Display current profile",
+    )
+    profile_p.add_argument(
+        "--edit",
+        action="store_true",
+        help="Edit existing profile (keeps current values as defaults)",
+    )
+    profile_p.add_argument(
+        "--reset",
+        action="store_true",
+        help="Delete profile and start fresh",
+    )
 
     # forge new
     new_p = subparsers.add_parser(
@@ -99,7 +121,11 @@ def main():
     args = parser.parse_args()
     project_dir = Path(args.project_dir).resolve()
 
-    if args.command == "doctor":
+    if args.command == "profile":
+        from forge.commands.profile import run_profile
+        run_profile(show=args.show, edit=args.edit, reset=args.reset)
+
+    elif args.command == "doctor":
         from forge.commands.doctor import run_doctor
         run_doctor(project_dir)
 

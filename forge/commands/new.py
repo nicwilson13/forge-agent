@@ -90,6 +90,21 @@ def _prompt(question: str) -> str:
         print("  Please provide an answer.")
 
 
+def _prompt_with_default(question: str, default: str) -> str:
+    """
+    Prompt with a pre-filled default. Empty input accepts the default.
+
+    Args:
+        question: The question to display.
+        default: Default value shown to the user; returned on empty input.
+
+    Returns:
+        The user's answer, or the default if they pressed Enter.
+    """
+    answer = input(question).strip()
+    return answer if answer else default
+
+
 def _has_existing_docs(project_dir: Path) -> bool:
     """
     Check if any Forge project docs already exist.
@@ -144,15 +159,18 @@ The 5 questions must cover these topics (but phrased specifically for this produ
 Return a JSON array of exactly 5 question strings. Nothing else."""
 
 
-def _conduct_interview(description: str) -> dict:
+def _conduct_interview(description: str, profile: dict | None = None) -> dict:
     """
     Conduct a 5-question interview tailored to the product description.
 
     Calls the Anthropic API to generate tailored questions, then prompts
-    the user for each answer interactively.
+    the user for each answer interactively. If a profile is provided,
+    the stack question (Q2) is auto-filled and deployment/design questions
+    (Q4/Q5) show pre-filled defaults.
 
     Args:
         description: The product description from the user.
+        profile: Optional user profile dict with stack preferences.
 
     Returns:
         A dict with keys: description, q1-q5, a1-a5.
@@ -173,9 +191,55 @@ def _conduct_interview(description: str) -> dict:
 
     result = {"description": description}
 
+    # Determine if profile has stack to auto-fill Q2
+    has_stack = False
+    stack_summary = ""
+    if profile:
+        from forge.profile import get_stack_summary
+        stack_summary = get_stack_summary(profile)
+        has_stack = bool(stack_summary)
+
+    shown = 0
+    total_shown = 5 - (1 if has_stack else 0)
+
     for i, question in enumerate(questions[:5], 1):
         result[f"q{i}"] = question
-        answer = _prompt(f"  {i}/5  {question}\n  > ")
+
+        # Q2 (stack): auto-fill from profile if available
+        if i == 2 and has_stack:
+            result[f"a{i}"] = stack_summary
+            print(f"  {SYM_OK}  Stack from profile: {stack_summary}")
+            print(f"     Enter to keep, or type \"customize\" to change:")
+            try:
+                override = input("  > ").strip()
+            except KeyboardInterrupt:
+                raise
+            if override.lower() == "customize":
+                answer = _prompt(f"  Your stack:\n  > ")
+                result[f"a{i}"] = answer
+            elif override:
+                result[f"a{i}"] = override
+            print()
+            continue
+
+        shown += 1
+
+        # Q4 (deployment) / Q5 (design): show profile default
+        default = None
+        if i == 4 and profile and profile.get("deployment"):
+            default = profile["deployment"]
+        elif i == 5 and profile and profile.get("design_direction"):
+            default = profile["design_direction"]
+
+        if default:
+            print(f"  {shown}/{total_shown}  {question}")
+            print(f"       Profile default: {default}")
+            answer = _prompt_with_default(
+                f"       Enter to keep, or type override:\n  > ", default
+            )
+        else:
+            answer = _prompt(f"  {shown}/{total_shown}  {question}\n  > ")
+
         result[f"a{i}"] = answer
         print()
 
@@ -186,17 +250,25 @@ def _conduct_interview(description: str) -> dict:
 # Document generation
 # ---------------------------------------------------------------------------
 
-def _build_interview_context(answers: dict) -> str:
+def _build_interview_context(answers: dict, profile: dict | None = None) -> str:
     """
     Build a formatted string of the full interview for API prompts.
 
     Args:
         answers: The interview dict with description, q1-q5, a1-a5.
+        profile: Optional user profile dict to prepend as context.
 
     Returns:
         Formatted interview context string.
     """
-    lines = [f"Product description: {answers['description']}\n"]
+    lines = []
+    if profile:
+        from forge.profile import profile_to_claude_md_context
+        profile_ctx = profile_to_claude_md_context(profile)
+        if profile_ctx:
+            lines.append(profile_ctx)
+            lines.append("")
+    lines.append(f"Product description: {answers['description']}\n")
     for i in range(1, 6):
         q = answers.get(f"q{i}", "")
         a = answers.get(f"a{i}", "")
@@ -268,7 +340,8 @@ Requirements:
   right after the heading"""
 
 
-def _generate_docs(project_dir: Path, description: str, answers: dict) -> dict:
+def _generate_docs(project_dir: Path, description: str, answers: dict,
+                   profile: dict | None = None) -> dict:
     """
     Generate VISION.md, REQUIREMENTS.md, and CLAUDE.md from interview context.
 
@@ -279,6 +352,7 @@ def _generate_docs(project_dir: Path, description: str, answers: dict) -> dict:
         project_dir: The project directory to write files into.
         description: The original product description.
         answers: The full interview dict.
+        profile: Optional user profile dict for enriched context.
 
     Returns:
         A dict mapping filename to content for summary display.
@@ -286,7 +360,7 @@ def _generate_docs(project_dir: Path, description: str, answers: dict) -> dict:
     Raises:
         Exception: If any API call fails, with a clear error message.
     """
-    context = _build_interview_context(answers)
+    context = _build_interview_context(answers, profile=profile)
 
     print("  Generating your project docs...\n")
 
@@ -370,6 +444,15 @@ def run_new(project_dir: Path, description: Optional[str] = None) -> None:
             return
         print()
 
+    # Load profile
+    from forge.profile import load_profile, has_profile, get_stack_summary
+    profile = load_profile() if has_profile() else None
+    if profile:
+        stack = get_stack_summary(profile)
+        if stack:
+            print(f"\n  {SYM_OK}  Profile loaded: {stack}")
+            print(f"     (run `forge profile --edit` to change defaults)")
+
     # Get description
     try:
         if description is None:
@@ -377,13 +460,14 @@ def run_new(project_dir: Path, description: Optional[str] = None) -> None:
             description = _prompt("  > ")
             print()
 
-        print(f"  Great idea. Five quick questions to tailor your build.")
+        q_count = "Four" if profile and get_stack_summary(profile) else "Five"
+        print(f"  Great idea. {q_count} quick questions to tailor your build.")
 
         # Conduct interview
-        answers = _conduct_interview(description)
+        answers = _conduct_interview(description, profile=profile)
 
         # Generate documents
-        generated = _generate_docs(project_dir, description, answers)
+        generated = _generate_docs(project_dir, description, answers, profile=profile)
 
     except KeyboardInterrupt:
         print("\n\n[forge] Interview cancelled.")

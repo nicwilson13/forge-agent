@@ -10,6 +10,7 @@ setup(
         "anthropic>=0.40.0",
         "claude-code-sdk>=0.0.9",
         "anyio>=4.0.0",
+        "pyyaml>=6.0",
     ],
     entry_points={
         "console_scripts": [
