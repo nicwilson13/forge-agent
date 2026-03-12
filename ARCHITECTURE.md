@@ -1,88 +1,81 @@
 # ARCHITECTURE.md
 
-## High-Level Design
+## High-Level System Design
 
-Forge is an autonomous AI development agent that operates in an unattended build loop:
+Forge is an autonomous AI development agent that operates as a CLI tool. It reads project specifications (VISION.md, REQUIREMENTS.md), generates a phased build plan, and executes tasks via Claude Code SDK in an unattended loop.
 
 ```
-CLI (forge run) → Orchestrator (planning) → Builder (execution) → Quality Gates → Git Commit
-      ↑                                                                    ↓
-      └────────────────── Checkpoint (resume on failure) ←─────────────────┘
+┌─────────────┐     ┌──────────────────┐     ┌────────────┐     ┌────────────┐
+│   CLI       │────▶│   Orchestrator   │────▶│  Builder   │────▶│ Git Utils  │
+│  (run.py)   │     │  (Claude Opus)   │     │ (SDK exec) │     │  (commits) │
+└─────────────┘     └──────────────────┘     └────────────┘     └────────────┘
+       │                    │                       │                  │
+       └────────────────────┴───────────────────────┴──────────────────┘
+                                    │
+                            ┌───────▼───────┐
+                            │  Checkpoint   │
+                            │ (state.json)  │
+                            └───────────────┘
 ```
 
-**Core Components:**
-- **Orchestrator** (`orchestrator.py`): Calls Anthropic API for planning—phase/task generation, architecture docs, QA evaluation
-- **Builder** (`builder.py`): Executes tasks via Claude Code SDK, streams output, classifies errors
-- **Run Loop** (`commands/run.py`): Main state machine—iterates phases/tasks, handles retries, commits
-- **State** (`state.py`): Dataclasses (`ForgeState` → `Phase` → `Task`) persisted to `.forge/state.json`
-- **Checkpoint** (`checkpoint.py`): Atomic saves for crash recovery
+**Data Flow**: `forge run` → load state → generate phases (Orchestrator) → generate tasks per phase → execute each task (Builder) → run tests → evaluate QA → commit on success → retry/park on failure → complete phase → advance.
 
 ## Technology Stack
 
 | Layer | Choice | Rationale |
 |-------|--------|-----------|
-| Runtime | Python 3.10+ | SDK availability, rapid prototyping |
-| AI Planning | Anthropic API (Opus/Sonnet/Haiku) | Model routing by complexity |
-| AI Execution | Claude Code SDK | Direct code generation with tool use |
-| State | JSON files in `.forge/` | No external DB, portable, git-friendly |
-| Dashboard | stdlib `http.server` + SSE | Zero dependencies, localhost only |
-| Integrations | urllib (no requests) | Minimize dependencies in utility modules |
+| Language | Python 3.10+ | Claude Code SDK native support, rapid CLI development |
+| AI API | Anthropic Claude (Opus/Sonnet/Haiku) | Best-in-class reasoning, tiered model routing for cost optimization |
+| Task Execution | `claude-code-sdk` | Direct code generation with streaming output |
+| State | JSON files in `.forge/` | Simple, human-readable, git-friendly, no DB dependencies |
+| Dashboard | stdlib `http.server` + SSE | Zero dependencies, runs anywhere Python runs |
+| Async | `asyncio` + `anyio` | Parallel task execution within waves |
 
 ## Directory Structure
 
 ```
 forge/
-├── cli.py                 # Entry point, command router
-├── orchestrator.py        # Anthropic API planning calls
-├── builder.py             # Claude Code SDK execution
-├── state.py               # ForgeState/Phase/Task dataclasses
-├── checkpoint.py          # Atomic state persistence
-├── parallel.py            # Async task execution with locks
-├── dependency_graph.py    # Task wave computation
-├── router.py              # Model tier selection
-├── retry.py               # Backoff logic, error classification
-├── context_budget.py      # Token allocation (80K budget)
-├── commands/              # CLI command implementations
-│   ├── run.py             # Main build loop
-│   ├── new.py             # Project setup interview
-│   └── linear_plan.py     # Linear sync command
-├── skills/                # Domain-specific markdown guides
-└── [integrations]         # GitHub, Linear, Figma, Vercel, Sentry, Ollama
+├── commands/           # CLI entry points (run.py, new.py, status.py, etc.)
+├── integrations/       # External services (GitHub, Linear, Vercel, Figma, Sentry)
+├── quality/            # Quality gates (diff_review, security_scan, visual_qa, e2e)
+├── dashboard/          # Web UI views and nav shell
+├── skills/             # Domain knowledge packs (auth.md, payments.md, etc.)
+├── orchestrator.py     # Claude Opus API wrapper
+├── builder.py          # Claude Code SDK executor
+├── state.py            # ForgeState → Phase → Task dataclasses
+├── checkpoint.py       # Atomic state persistence
+├── parallel.py         # Wave-based concurrent execution
+├── router.py           # Model tier selection
+└── context_budget.py   # Token allocation with priority truncation
 ```
 
-**Runtime artifacts** (`.forge/`): `state.json`, `cost_log.jsonl`, `build.log`, `memory/`, integration configs
-
-## Data Flow
-
-1. **Planning**: `generate_phases()` → `generate_tasks()` → tasks with `depends_on` declarations
-2. **Execution**: `compute_execution_waves()` → parallel task execution within waves, sequential between waves
-3. **Quality**: Per-task (`diff_review`) → Per-phase (`e2e_generator`, `security_scan`)
-4. **Persistence**: Every state change → atomic checkpoint write
+**Runtime state**: `.forge/state.json`, `.forge/build.log`, `.forge/cost_log.jsonl`, `.forge/memory/`
 
 ## Key Patterns
 
-- **Pure utility modules**: Integration modules (`*_integration.py`) import only stdlib—never crash the build loop
-- **Error prefix protocol**: Builder stderr uses prefixes (`AUTH_ERROR:`, `RATE_LIMIT:`) parsed by `extract_error_prefix()`
-- **Never-raise convention**: Quality gates and integrations catch all exceptions, return safe defaults
-- **Wave-based parallelism**: Tasks grouped by dependency into waves; each wave runs concurrently
-- **Atomic writes**: All file operations use write-to-temp-then-rename
+1. **Pure utility modules**: `retry.py`, `context_budget.py`, `build_logger.py`, etc. have zero forge imports—imported by others, never reverse.
 
-## Key Decisions
+2. **Error prefix classification**: Builder stderr uses prefixes (`AUTH_ERROR:`, `RATE_LIMIT:`) parsed by `extract_error_prefix()` for retry/fatal decisions.
 
-**ADR-1: Single `.forge/` directory**
-All runtime state in one location. Simplifies backup, .gitignore, and debugging.
+3. **Never-raise convention**: Quality gates, integrations, and config loaders catch all exceptions, returning safe defaults to never crash the build loop.
 
-**ADR-2: Sensitive tokens in `~/.forge/profile.yaml`**
-Never store API keys in project directory. Prevents accidental commits.
+4. **Atomic file writes**: Write to `.tmp` then `rename()`. Used by checkpoint, cost_tracker, build_logger.
 
-**ADR-3: Model routing by tier**
-Opus for high-stakes (QA, architecture), Sonnet for tasks, Haiku for docs. Escalate after 2 failures.
+5. **Wave-based parallelism**: Tasks declare `depends_on` → `compute_execution_waves()` → parallel within waves, sequential between.
 
-**ADR-4: Integration modules are stdlib-only**
-Zero forge imports ensures failures are isolated. All return safe defaults.
+## Architecture Decisions
 
-**ADR-5: Task dependencies via `depends_on` field**
-Explicit declaration in task generation. IDs remapped from API placeholders to real UUIDs.
+**ADR-1: File-based state over database**
+JSON in `.forge/` is human-readable, git-friendly, and requires no setup. Trade-off: no concurrent access safety (mitigated by `ParallelLocks`).
 
-**ADR-6: Phase completion gates**
-E2E → Security scan → Phase evaluation → GitHub/Vercel/Sentry checks. All results fed to `evaluate_phase()`.
+**ADR-2: Tiered model routing**
+Opus for high-stakes (QA, architecture), Sonnet for moderate (task generation), Haiku for low-stakes (phase listing). Escalation after 2 failures. Balances cost vs. quality.
+
+**ADR-3: Quality gates are non-blocking by default**
+`diff_review` flags but doesn't block; `security_scan` only blocks on confirmed critical findings. Maintains forward progress.
+
+**ADR-4: Tokens in profile, config in project**
+Sensitive tokens (`~/.forge/profile.yaml`) separate from project config (`.forge/*.json`). Project configs can be committed; tokens cannot.
+
+**ADR-5: SSE for dashboard updates**
+Server-Sent Events over WebSocket: simpler, unidirectional (server→client), no extra dependencies.
