@@ -202,15 +202,35 @@ Rules:
 - Flag any task that requires external secrets, manual configuration, or human judgment
   by including "NEEDS_HUMAN: <reason>" at the start of the description
 
+For each task, declare any dependencies on other tasks in the same phase.
+A task depends on another if it uses code, data, or setup from that task.
+
 Return a JSON array:
 [
   {
+    "id": "t_01",
     "title": "Short task title",
     "description": "Detailed instructions for the AI coding agent.",
-    "needs_human": false
+    "needs_human": false,
+    "depends_on": []
   },
-  ...
+  {
+    "id": "t_02",
+    "title": "Another task",
+    "description": "Detailed instructions...",
+    "needs_human": false,
+    "depends_on": ["t_01"]
+  }
 ]
+
+Rules for depends_on:
+- Only list DIRECT dependencies (not transitive)
+- Only reference task IDs within the same phase
+- Keep dependencies minimal - only declare what is strictly required
+- Prefer parallel execution (fewer deps = faster builds)
+- Foundation tasks (project setup, config) that everything needs: list them
+- UI tasks that need the foundation: depend on foundation
+- Independent features (e.g. separate API routes): no deps on each other
 """
 
 
@@ -248,13 +268,27 @@ Description: {phase.description}
 """
     raw_tasks, usage = _json_chat(TASK_SYSTEM, user, model=model)
     tasks = []
+    # Map API-generated IDs (e.g. t_01) to real UUIDs
+    id_map: dict[str, str] = {}
     for t in raw_tasks:
         desc = t["description"]
         task = Task.new(t["title"], desc, phase.id)
+        # Track mapping from API ID to real task ID
+        api_id = t.get("id", "")
+        if api_id:
+            id_map[api_id] = task.id
         # Pre-flag NEEDS_HUMAN tasks
         if t.get("needs_human") or desc.strip().upper().startswith("NEEDS_HUMAN"):
             task.park_reason = desc.split("\n")[0].replace("NEEDS_HUMAN:", "").strip()
+        # Store raw depends_on for remapping after all tasks created
+        task._raw_deps = t.get("depends_on", [])
         tasks.append(task)
+    # Remap depends_on from API IDs to real task IDs
+    for task in tasks:
+        raw_deps = getattr(task, "_raw_deps", [])
+        task.depends_on = [id_map[d] for d in raw_deps if d in id_map]
+        if hasattr(task, "_raw_deps"):
+            del task._raw_deps
     return tasks, usage
 
 

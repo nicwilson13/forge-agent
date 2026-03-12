@@ -218,8 +218,16 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
                        if t.status in (TaskStatus.PENDING, TaskStatus.FAILED,
                                        TaskStatus.INTERRUPTED, TaskStatus.COMMIT_PENDING)]
             if len(pending) > 1:
-                print(f"\n  Phase {state.current_phase_index + 1}: {phase.title}"
-                      f"  ({len(pending)} tasks, {min(max_parallel, len(pending))} parallel)\n")
+                from forge.dependency_graph import compute_execution_waves, format_wave_plan
+                waves = compute_execution_waves(pending)
+                if len(waves) > 1:
+                    print(f"\n{format_wave_plan(waves)}")
+                    print(f"\n  Phase {state.current_phase_index + 1}: {phase.title}"
+                          f"  ({len(pending)} tasks, {max_parallel} parallel,"
+                          f" dependency-aware)\n")
+                else:
+                    print(f"\n  Phase {state.current_phase_index + 1}: {phase.title}"
+                          f"  ({len(pending)} tasks, {min(max_parallel, len(pending))} parallel)\n")
                 completed = await _run_phase_parallel(
                     project_dir, state, phase, loop_guard,
                     max_retries, dry_run, tracker, logger, max_parallel

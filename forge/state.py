@@ -20,6 +20,7 @@ class TaskStatus(str, Enum):
     PARKED = "parked"           # moved to NEEDS_HUMAN
     INTERRUPTED = "interrupted"        # was IN_PROGRESS when Forge stopped
     COMMIT_PENDING = "commit_pending"  # task done, commit not yet pushed
+    WAITING = "waiting"                # has unmet dependencies, cannot start yet
 
 
 class PhaseStatus(str, Enum):
@@ -46,6 +47,7 @@ class Task:
     commit_hash: Optional[str] = None
     last_model: str = ""
     parallel_group: int = 0   # 0 = sequential, N = can run with same group
+    depends_on: list[str] = field(default_factory=list)
 
     @staticmethod
     def new(title: str, description: str, phase_id: str) -> "Task":

@@ -77,7 +77,10 @@ class ParallelExecutor:
         **shared_kwargs,
     ) -> list[TaskResult]:
         """
-        Run all tasks concurrently, up to max_parallel at once.
+        Run tasks in dependency order, with parallel execution within each wave.
+
+        If tasks have no depends_on declarations, runs as before (one wave).
+        If tasks have deps, uses compute_execution_waves() to determine order.
 
         tasks: list of Task objects to execute
         task_func: async function with signature:
@@ -86,22 +89,38 @@ class ParallelExecutor:
 
         Returns list of TaskResult in completion order.
         """
-        self._semaphore = asyncio.Semaphore(self.max_parallel)
-        results: list[TaskResult] = []
-        result_lock = asyncio.Lock()
+        from forge.dependency_graph import compute_execution_waves
 
-        async def run_one(task):
-            async with self._semaphore:
-                result = await task_func(
-                    task, self.locks, **shared_kwargs
-                )
-                async with result_lock:
-                    results.append(result)
-            return result
+        waves = compute_execution_waves(tasks)
+        all_results: list[TaskResult] = []
 
-        await asyncio.gather(*[run_one(t) for t in tasks],
-                             return_exceptions=True)
-        return results
+        for wave_num, wave_tasks in enumerate(waves):
+            if len(waves) > 1:
+                print(f"\n  Wave {wave_num + 1}/{len(waves)}: "
+                      f"{len(wave_tasks)} task(s)")
+
+            self._semaphore = asyncio.Semaphore(
+                min(self.max_parallel, len(wave_tasks))
+            )
+            result_lock = asyncio.Lock()
+            wave_results: list[TaskResult] = []
+
+            async def run_one(task):
+                async with self._semaphore:
+                    result = await task_func(
+                        task, self.locks, **shared_kwargs
+                    )
+                    async with result_lock:
+                        wave_results.append(result)
+                return result
+
+            await asyncio.gather(
+                *[run_one(t) for t in wave_tasks],
+                return_exceptions=True
+            )
+            all_results.extend(wave_results)
+
+        return all_results
 
     async def locked_print(self, message: str) -> None:
         """Print a message with the print lock held."""

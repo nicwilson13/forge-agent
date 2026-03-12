@@ -33,8 +33,18 @@ def run_status(project_dir: Path, show_cost: bool = False,
         for task in phase.tasks:
             icon = {"done": "✓", "parked": "⚠", "failed": "✗",
                     "in_progress": "→", "pending": "·",
-                    "interrupted": "↺", "commit_pending": "⏳"}.get(task.status, "?")
-            print(f"         {icon} [{task.id}] {task.title}")
+                    "interrupted": "↺", "commit_pending": "⏳",
+                    "waiting": "⏸"}.get(task.status, "?")
+            if task.status == TaskStatus.WAITING and task.depends_on:
+                deps_done = sum(
+                    1 for d in task.depends_on
+                    if any(t.id == d and t.status == TaskStatus.DONE
+                           for t in phase.tasks)
+                )
+                print(f"         {icon} [{task.id}] {task.title}"
+                      f"  (waiting: {deps_done}/{len(task.depends_on)} deps done)")
+            else:
+                print(f"         {icon} [{task.id}] {task.title}")
 
     # Memory summary
     mem = count_entries(project_dir)
