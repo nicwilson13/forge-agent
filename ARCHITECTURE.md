@@ -2,80 +2,81 @@
 
 ## High-Level System Design
 
-Forge is an autonomous AI development agent that operates as a CLI tool. It reads project specifications (VISION.md, REQUIREMENTS.md), generates a phased build plan, and executes tasks via Claude Code SDK in an unattended loop.
+Forge is an autonomous AI development agent built as a pipeline with clear stage boundaries:
 
 ```
-┌─────────────┐     ┌──────────────────┐     ┌────────────┐     ┌────────────┐
-│   CLI       │────▶│   Orchestrator   │────▶│  Builder   │────▶│ Git Utils  │
-│  (run.py)   │     │  (Claude Opus)   │     │ (SDK exec) │     │  (commits) │
-└─────────────┘     └──────────────────┘     └────────────┘     └────────────┘
-       │                    │                       │                  │
-       └────────────────────┴───────────────────────┴──────────────────┘
-                                    │
-                            ┌───────▼───────┐
-                            │  Checkpoint   │
-                            │ (state.json)  │
-                            └───────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              FORGE PIPELINE                              │
+├──────────────────────────────────────────────────────────────────────────┤
+│  Input: VISION.md + REQUIREMENTS.md                                      │
+│                         ↓                                                │
+│  ┌─────────────┐   ┌──────────────┐   ┌──────────────┐   ┌────────────┐ │
+│  │ Orchestrator │ → │   Builder    │ → │ Quality Gates│ → │ Git Utils  │ │
+│  │ (Opus API)   │   │ (Claude SDK) │   │ (scan/test)  │   │ (commit)   │ │
+│  └─────────────┘   └──────────────┘   └──────────────┘   └────────────┘ │
+│                         ↓                                                │
+│  Checkpoint: .forge/state.json (atomic save at every transition)         │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Data Flow**: `forge run` → load state → generate phases (Orchestrator) → generate tasks per phase → execute each task (Builder) → run tests → evaluate QA → commit on success → retry/park on failure → complete phase → advance.
+**Core Flow**: `run.py` → `orchestrator.py` → `builder.py` → `git_utils.py`
 
 ## Technology Stack
 
 | Layer | Choice | Rationale |
 |-------|--------|-----------|
-| Language | Python 3.10+ | Claude Code SDK native support, rapid CLI development |
-| AI API | Anthropic Claude (Opus/Sonnet/Haiku) | Best-in-class reasoning, tiered model routing for cost optimization |
-| Task Execution | `claude-code-sdk` | Direct code generation with streaming output |
-| State | JSON files in `.forge/` | Simple, human-readable, git-friendly, no DB dependencies |
-| Dashboard | stdlib `http.server` + SSE | Zero dependencies, runs anywhere Python runs |
-| Async | `asyncio` + `anyio` | Parallel task execution within waves |
+| Runtime | Python 3.10+ | Claude SDK compatibility, async support |
+| AI Planning | Anthropic Claude (Opus/Sonnet/Haiku) | Best-in-class reasoning for code generation |
+| AI Execution | Claude Code SDK | Streaming task execution with real-time output |
+| State | JSON files in `.forge/` | Simple, git-friendly, no database dependency |
+| Parallelism | asyncio + wave-based scheduling | Bounded concurrency with dependency ordering |
+| Dashboard | stdlib http.server + SSE | Zero dependencies, runs anywhere |
 
 ## Directory Structure
 
 ```
 forge/
-├── commands/           # CLI entry points (run.py, new.py, status.py, etc.)
-├── integrations/       # External services (GitHub, Linear, Vercel, Figma, Sentry)
-├── quality/            # Quality gates (diff_review, security_scan, visual_qa, e2e)
-├── dashboard/          # Web UI views and nav shell
-├── skills/             # Domain knowledge packs (auth.md, payments.md, etc.)
-├── orchestrator.py     # Claude Opus API wrapper
-├── builder.py          # Claude Code SDK executor
-├── state.py            # ForgeState → Phase → Task dataclasses
-├── checkpoint.py       # Atomic state persistence
-├── parallel.py         # Wave-based concurrent execution
-├── router.py           # Model tier selection
-└── context_budget.py   # Token allocation with priority truncation
+├── commands/          # CLI entry points (run, new, status, checkin, etc.)
+├── skills/            # Markdown knowledge packs (auth, payments, deploy)
+├── orchestrator.py    # AI planning: phases, tasks, architecture, QA
+├── builder.py         # Task execution via Claude Code SDK
+├── state.py           # Dataclasses: ForgeState → Phase → Task
+├── checkpoint.py      # Atomic state persistence
+├── context_budget.py  # Token allocation with priority-based truncation
+├── parallel.py        # Wave-based concurrent task execution
+├── dependency_graph.py# DAG analysis for execution ordering
+├── router.py          # Model routing (Opus/Sonnet/Haiku) by complexity
+├── *_integration.py   # External service connectors (GitHub, Linear, etc.)
+├── *_view.py          # Dashboard page renderers
+└── quality gates/     # diff_review, security_scan, visual_qa, e2e_generator
 ```
 
-**Runtime state**: `.forge/state.json`, `.forge/build.log`, `.forge/cost_log.jsonl`, `.forge/memory/`
+**State Location**: All runtime data lives in `.forge/` (state, logs, configs). Tokens live in `~/.forge/profile.yaml`.
+
+## Data Flow
+
+1. **Planning**: Orchestrator reads `VISION.md` + `REQUIREMENTS.md` → generates phases → generates tasks per phase
+2. **Execution**: Builder executes tasks via SDK → streams output → returns (success, stdout, stderr, duration)
+3. **Quality**: Each task passes through diff review; each phase through security scan + E2E tests
+4. **Persistence**: Checkpoint saves state atomically after every status change
+5. **Integration**: GitHub milestones/PRs created per phase; Linear/Vercel/Sentry sync optional
 
 ## Key Patterns
 
-1. **Pure utility modules**: `retry.py`, `context_budget.py`, `build_logger.py`, etc. have zero forge imports—imported by others, never reverse.
+- **Never-raise integration modules**: All external API calls return safe defaults on failure
+- **Error prefix classification**: Builder stderr uses prefixes (`AUTH_ERROR:`, `RATE_LIMIT:`) for retry logic
+- **Atomic writes**: All file operations use temp-then-rename pattern
+- **Wave-based parallelism**: Tasks grouped by dependency into waves; waves run sequentially, tasks within waves run concurrently
+- **Priority token budgeting**: 80K token budget with truncation by priority (task/notes never truncated)
+- **Model escalation**: After 2 failures, task routes to higher-tier model
 
-2. **Error prefix classification**: Builder stderr uses prefixes (`AUTH_ERROR:`, `RATE_LIMIT:`) parsed by `extract_error_prefix()` for retry/fatal decisions.
+## Key Decisions (ADR-lite)
 
-3. **Never-raise convention**: Quality gates, integrations, and config loaders catch all exceptions, returning safe defaults to never crash the build loop.
-
-4. **Atomic file writes**: Write to `.tmp` then `rename()`. Used by checkpoint, cost_tracker, build_logger.
-
-5. **Wave-based parallelism**: Tasks declare `depends_on` → `compute_execution_waves()` → parallel within waves, sequential between.
-
-## Architecture Decisions
-
-**ADR-1: File-based state over database**
-JSON in `.forge/` is human-readable, git-friendly, and requires no setup. Trade-off: no concurrent access safety (mitigated by `ParallelLocks`).
-
-**ADR-2: Tiered model routing**
-Opus for high-stakes (QA, architecture), Sonnet for moderate (task generation), Haiku for low-stakes (phase listing). Escalation after 2 failures. Balances cost vs. quality.
-
-**ADR-3: Quality gates are non-blocking by default**
-`diff_review` flags but doesn't block; `security_scan` only blocks on confirmed critical findings. Maintains forward progress.
-
-**ADR-4: Tokens in profile, config in project**
-Sensitive tokens (`~/.forge/profile.yaml`) separate from project config (`.forge/*.json`). Project configs can be committed; tokens cannot.
-
-**ADR-5: SSE for dashboard updates**
-Server-Sent Events over WebSocket: simpler, unidirectional (server→client), no extra dependencies.
+| Decision | Choice | Why |
+|----------|--------|-----|
+| No database | JSON files | Simplicity, portability, git-friendly state |
+| Separate orchestrator/builder | Clear API/execution boundary | Different models, different retry semantics |
+| Wave-based (not reactive) parallelism | Predictable execution order | Easier debugging, deterministic behavior |
+| Quality gates don't block | Report and continue | Build completion > perfection; humans review NEEDS_HUMAN.md |
+| Tokens in user home, configs in project | Security + portability | Secrets never committed; configs version-controlled |
+| stdlib-only dashboard | No npm/build step | Runs anywhere Python runs |
