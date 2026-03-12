@@ -1,0 +1,414 @@
+"""
+forge new - Generate project docs via a guided AI interview.
+
+Accepts an optional product description as a CLI argument.
+If not provided, prompts interactively.
+Conducts a 5-question interview tailored to the product idea,
+then uses the Anthropic API to generate VISION.md, REQUIREMENTS.md,
+and CLAUDE.md from the full interview context.
+"""
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+from typing import Optional
+
+import anthropic
+
+from forge.display import SYM_OK, SYM_WARN, divider
+
+
+_CLIENT = None
+
+
+def _client() -> anthropic.Anthropic:
+    """Return a shared Anthropic client instance."""
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    return _CLIENT
+
+
+def _chat(system: str, user: str, max_tokens: int = 4096) -> str:
+    """
+    Make a single Anthropic API call.
+
+    Args:
+        system: System prompt.
+        user: User message.
+        max_tokens: Maximum tokens in the response.
+
+    Returns:
+        The text content of the response.
+    """
+    resp = _client().messages.create(
+        model="claude-opus-4-5",
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    return resp.content[0].text.strip()
+
+
+def _json_chat(system: str, user: str, max_tokens: int = 4096) -> dict | list:
+    """
+    Call the Anthropic API and parse JSON from the response.
+
+    Args:
+        system: System prompt.
+        user: User message.
+        max_tokens: Maximum tokens in the response.
+
+    Returns:
+        Parsed JSON as a dict or list.
+    """
+    system_with_json = system + "\n\nYou MUST respond with valid JSON only. No prose, no markdown fences."
+    raw = _chat(system_with_json, user, max_tokens)
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1]
+        raw = raw.rsplit("```", 1)[0]
+    return json.loads(raw)
+
+
+def _prompt(question: str) -> str:
+    """
+    Prompt the user for input, looping until non-empty input is provided.
+
+    Args:
+        question: The question to display.
+
+    Returns:
+        The user's stripped, non-empty response.
+    """
+    while True:
+        answer = input(question).strip()
+        if answer:
+            return answer
+        print("  Please provide an answer.")
+
+
+def _has_existing_docs(project_dir: Path) -> bool:
+    """
+    Check if any Forge project docs already exist.
+
+    Args:
+        project_dir: The project directory to check.
+
+    Returns:
+        True if VISION.md, REQUIREMENTS.md, or CLAUDE.md exists.
+    """
+    return any(
+        (project_dir / f).exists()
+        for f in ("VISION.md", "REQUIREMENTS.md", "CLAUDE.md")
+    )
+
+
+def _count_requirements(content: str) -> int:
+    """
+    Count checkbox items in REQUIREMENTS.md content.
+
+    Args:
+        content: The full text content of REQUIREMENTS.md.
+
+    Returns:
+        Number of '- [ ]' or '- [x]' lines found.
+    """
+    count = 0
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- [ ]") or stripped.startswith("- [x]"):
+            count += 1
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Interview
+# ---------------------------------------------------------------------------
+
+QUESTION_SYSTEM = """You are a technical product strategist helping someone
+describe their software idea in enough detail for an AI agent to build it.
+Generate exactly 5 interview questions tailored specifically to the product
+described. Questions should be conversational, not technical, and extract
+the information an AI builder needs most.
+
+The 5 questions must cover these topics (but phrased specifically for this product):
+1. Primary users / audience
+2. Preferred tech stack (suggest they type "you decide" if unsure)
+3. Must-have features for v1 (ask for 3-5)
+4. Deployment target / hosting
+5. Design direction / visual style
+
+Return a JSON array of exactly 5 question strings. Nothing else."""
+
+
+def _conduct_interview(description: str) -> dict:
+    """
+    Conduct a 5-question interview tailored to the product description.
+
+    Calls the Anthropic API to generate tailored questions, then prompts
+    the user for each answer interactively.
+
+    Args:
+        description: The product description from the user.
+
+    Returns:
+        A dict with keys: description, q1-q5, a1-a5.
+    """
+    print("\n  Generating tailored questions...\n")
+
+    questions = _json_chat(QUESTION_SYSTEM, description)
+
+    if not isinstance(questions, list) or len(questions) < 5:
+        # Fallback to generic questions
+        questions = [
+            "Who is the primary user of this product?",
+            "What's your preferred tech stack? (e.g. Next.js + Supabase, Django + Postgres, or type \"you decide\")",
+            "What are the 3-5 must-have features for your first version?",
+            "Where will this be deployed? (e.g. Vercel, AWS, self-hosted)",
+            "Describe the design direction in a few words (e.g. \"clean and minimal\", \"bold and energetic\", \"like Linear\")",
+        ]
+
+    result = {"description": description}
+
+    for i, question in enumerate(questions[:5], 1):
+        result[f"q{i}"] = question
+        answer = _prompt(f"  {i}/5  {question}\n  > ")
+        result[f"a{i}"] = answer
+        print()
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Document generation
+# ---------------------------------------------------------------------------
+
+def _build_interview_context(answers: dict) -> str:
+    """
+    Build a formatted string of the full interview for API prompts.
+
+    Args:
+        answers: The interview dict with description, q1-q5, a1-a5.
+
+    Returns:
+        Formatted interview context string.
+    """
+    lines = [f"Product description: {answers['description']}\n"]
+    for i in range(1, 6):
+        q = answers.get(f"q{i}", "")
+        a = answers.get(f"a{i}", "")
+        lines.append(f"Q{i}: {q}")
+        lines.append(f"A{i}: {a}\n")
+    return "\n".join(lines)
+
+
+VISION_SYSTEM = """You are a senior product manager writing a VISION.md
+document for an autonomous AI development agent to build from.
+
+Write the document in present tense as if the product already exists.
+Include these sections with markdown headers:
+- Product Summary (one paragraph: what it does, who uses it, what problem it solves)
+- Core User Experience (walk through the primary user journey)
+- Key Screens / Interfaces (list the main UI surfaces or CLI commands)
+- Integrations (external services, APIs, or systems it connects to)
+- Success Criteria (how to know it's "done")
+
+Requirements:
+- Reference the specific features and design direction from the interview
+- Minimum 350 words - be substantive, not vague
+- Tone: confident product brief, not a template
+- Start with '# VISION.md' as the first line"""
+
+
+REQUIREMENTS_SYSTEM = """You are a senior software architect writing
+REQUIREMENTS.md for an autonomous AI development agent to build from.
+
+Include these sections:
+- Functional Requirements: numbered checkbox list (- [ ]) expanding the
+  must-have features from the interview with implicit requirements
+- Non-Functional Requirements: checkbox list for performance, security,
+  accessibility, inferred from the product type and deployment target
+- Out of Scope: bullet list of what v1 explicitly will NOT include
+- Technical Constraints: derived from the stack answer
+- Design Direction: from the interview answer
+
+Requirements:
+- Minimum 20 checkbox items total across functional and non-functional
+- Each item must be specific and testable, not vague
+- Start with '# REQUIREMENTS.md' as the first line"""
+
+
+CLAUDE_SYSTEM = """You are a senior developer writing CLAUDE.md - a
+configuration file that an autonomous AI coding agent reads on every task
+to maintain consistency.
+
+Based on the interview answers, fill in every section with real content:
+
+Sections to include:
+- Tech Stack: specific versions and tools based on the stack answer.
+  If the user said "you decide", choose a modern, well-supported stack
+  appropriate for the product type (SaaS -> Next.js 15 + Supabase,
+  CLI tool -> Python, mobile -> React Native + Expo, etc.)
+- Code Quality Standards: specific to the chosen stack
+- UI / UX Standards: incorporate the design direction from the interview
+- Git Conventions: standard Forge conventions
+- Architecture Principles: appropriate for the stack
+- Autonomous Decision Rules: stack-specific preferences
+- DO NOT: stack-specific anti-patterns
+
+Requirements:
+- Every bullet point must contain real content, not placeholders
+- Pre-fill the testing framework based on the stack
+- Include deployment-specific config notes if deployment target was mentioned
+- Start with '# CLAUDE.md' as the first line
+- Include the line "This file is read by Forge (and Claude Code) on every task."
+  right after the heading"""
+
+
+def _generate_docs(project_dir: Path, description: str, answers: dict) -> dict:
+    """
+    Generate VISION.md, REQUIREMENTS.md, and CLAUDE.md from interview context.
+
+    Makes three separate API calls. Writes files atomically - if any call
+    fails, no partial files are left behind.
+
+    Args:
+        project_dir: The project directory to write files into.
+        description: The original product description.
+        answers: The full interview dict.
+
+    Returns:
+        A dict mapping filename to content for summary display.
+
+    Raises:
+        Exception: If any API call fails, with a clear error message.
+    """
+    context = _build_interview_context(answers)
+
+    print("  Generating your project docs...\n")
+
+    # Generate all three documents, storing in memory first
+    generated = {}
+
+    try:
+        generated["VISION.md"] = _chat(VISION_SYSTEM, context, max_tokens=4096)
+    except Exception as e:
+        print(f"\n  [forge] ERROR: Failed to generate VISION.md: {e}")
+        print("  Please check your ANTHROPIC_API_KEY and try again.")
+        sys.exit(1)
+
+    try:
+        generated["REQUIREMENTS.md"] = _chat(REQUIREMENTS_SYSTEM, context, max_tokens=4096)
+    except Exception as e:
+        print(f"\n  [forge] ERROR: Failed to generate REQUIREMENTS.md: {e}")
+        print("  Please check your ANTHROPIC_API_KEY and try again.")
+        sys.exit(1)
+
+    try:
+        generated["CLAUDE.md"] = _chat(CLAUDE_SYSTEM, context, max_tokens=4096)
+    except Exception as e:
+        print(f"\n  [forge] ERROR: Failed to generate CLAUDE.md: {e}")
+        print("  Please check your ANTHROPIC_API_KEY and try again.")
+        sys.exit(1)
+
+    # Write atomically: temp file then rename
+    for filename, content in generated.items():
+        target = project_dir / filename
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=str(project_dir), suffix=f".{filename}.tmp", prefix="forge_"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(content)
+            Path(tmp_path).replace(target)
+        except Exception:
+            # Clean up temp file on failure
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+    return generated
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+def run_new(project_dir: Path, description: Optional[str] = None) -> None:
+    """
+    Run the forge new command: guided interview + document generation.
+
+    Args:
+        project_dir: The target project directory.
+        description: Optional product description. If None, prompts interactively.
+    """
+    project_dir = Path(project_dir)
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    # Header
+    d = divider("heavy")
+    print(f"\n{d}")
+    print(f"  FORGE NEW - Project Setup Interview")
+    print(d)
+
+    # Check for existing docs
+    if _has_existing_docs(project_dir):
+        print(f"\n  {SYM_WARN}  This directory already has project docs.")
+        print(f"     Regenerating will overwrite VISION.md, REQUIREMENTS.md, CLAUDE.md.")
+        try:
+            confirm = input("     Continue? (yes/no): ").strip().lower()
+        except KeyboardInterrupt:
+            print("\n\n[forge] Interview cancelled.")
+            return
+        if confirm != "yes":
+            print("\n[forge] Cancelled. Existing docs unchanged.")
+            return
+        print()
+
+    # Get description
+    try:
+        if description is None:
+            print("\n  What are you building? Describe your product idea:")
+            description = _prompt("  > ")
+            print()
+
+        print(f"  Great idea. Five quick questions to tailor your build.")
+
+        # Conduct interview
+        answers = _conduct_interview(description)
+
+        # Generate documents
+        generated = _generate_docs(project_dir, description, answers)
+
+    except KeyboardInterrupt:
+        print("\n\n[forge] Interview cancelled.")
+        return
+
+    # Create .forge dir
+    forge_dir = project_dir / ".forge"
+    forge_dir.mkdir(exist_ok=True)
+
+    # Print summary
+    vision_words = len(generated["VISION.md"].split())
+    req_count = _count_requirements(generated["REQUIREMENTS.md"])
+    claude_content = generated["CLAUDE.md"]
+
+    # Extract tech stack hint from CLAUDE.md
+    stack_line = ""
+    for line in claude_content.splitlines():
+        if "language:" in line.lower() or "framework:" in line.lower():
+            stack_line = line.strip().lstrip("- ").strip()
+            break
+    if not stack_line:
+        stack_line = "See CLAUDE.md for details"
+
+    print(f"  {SYM_OK} VISION.md         ({vision_words} words)")
+    print(f"  {SYM_OK} REQUIREMENTS.md   ({req_count} requirements)")
+    print(f"  {SYM_OK} CLAUDE.md         ({stack_line})")
+
+    print(f"\n  Your project is ready. Run `forge run` to start building.\n")

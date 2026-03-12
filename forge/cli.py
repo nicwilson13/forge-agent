@@ -2,6 +2,7 @@
 """
 Forge - Autonomous AI Development Agent
 Usage:
+  forge new [description] - Generate project docs via guided interview
   forge init              - Initialize project templates
   forge run               - Start autonomous build loop
   forge status            - Show current build status
@@ -22,6 +23,18 @@ def main():
     )
     parser.add_argument("--project-dir", default=".", help="Target project directory (default: cwd)")
     subparsers = parser.add_subparsers(dest="command")
+
+    # forge new
+    new_p = subparsers.add_parser(
+        "new",
+        help="Generate project docs via a guided interview",
+    )
+    new_p.add_argument(
+        "description",
+        nargs="?",
+        default=None,
+        help="Product description (optional - will prompt if not provided)",
+    )
 
     # forge init
     subparsers.add_parser("init", help="Initialize Forge templates in a project")
@@ -59,7 +72,11 @@ def main():
     args = parser.parse_args()
     project_dir = Path(args.project_dir).resolve()
 
-    if args.command == "init":
+    if args.command == "new":
+        from forge.commands.new import run_new
+        run_new(project_dir, args.description)
+
+    elif args.command == "init":
         from forge.commands.init import run_init
         run_init(project_dir)
 
