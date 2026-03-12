@@ -29,6 +29,7 @@ from forge.github_integration import (
     post_build_summary as gh_post_build_summary,
     format_issue_context,
 )
+from forge.vercel_integration import run_vercel_check, format_vercel_status
 
 # Module-level state for signal handler (must not be closures)
 _current_task: Task | None = None
@@ -865,6 +866,9 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
                 gh_config, gh_token, tracker, logger,
             )
 
+        # Vercel deployment check
+        _vercel_phase_complete(project_dir, state, phase, phase_index, logger)
+
         state.advance_phase()
     else:
         phase.status = PhaseStatus.QA_FAILED
@@ -1017,6 +1021,56 @@ def _github_phase_complete(
     if milestone_num and gh_config.create_milestones:
         close_milestone(gh_config, gh_token, milestone_num)
         print(f"  [github] Milestone #{milestone_num} closed")
+
+
+# ---------------------------------------------------------------------------
+# Vercel integration helpers
+# ---------------------------------------------------------------------------
+
+def _vercel_phase_complete(
+    project_dir: Path,
+    state: ForgeState,
+    phase,
+    phase_index: int,
+    logger: BuildLogger | None,
+) -> None:
+    """Run Vercel deployment check after a phase completes successfully."""
+    phase_num = phase_index + 1
+
+    # Get the latest commit SHA for filtering
+    import subprocess
+    git_sha = ""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(project_dir), capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            git_sha = result.stdout.strip()
+    except Exception:
+        pass
+
+    print(f"\n  [vercel] Checking deployment status...")
+    status, url_or_msg, build_logs = run_vercel_check(project_dir, git_sha=git_sha)
+    print(f"  {format_vercel_status(status, url_or_msg)}")
+
+    phase.vercel_deployment_url = url_or_msg if status == "ready" else ""
+    phase.vercel_deployment_status = status
+
+    if status == "error" and build_logs:
+        if logger:
+            logger.log("vercel_build_failed", phase=phase_num,
+                       logs=build_logs[:200])
+        # Inject a fix task into the phase
+        fix_prompt = (
+            f"Fix the Vercel build failure for Phase {phase_num}.\n\n"
+            f"Build error output:\n{build_logs}\n\n"
+            f"Fix the TypeScript/build errors shown above."
+        )
+        _inject_security_fix_task(state, phase, fix_prompt)
+    elif status == "ready":
+        if logger:
+            logger.log("vercel_deployed", phase=phase_num, url=url_or_msg)
 
 
 # ---------------------------------------------------------------------------

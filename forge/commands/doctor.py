@@ -445,6 +445,53 @@ def _check_github_config(project_dir: Path) -> CheckResult | None:
 
 
 # ---------------------------------------------------------------------------
+# Vercel config check
+# ---------------------------------------------------------------------------
+
+def _check_vercel_config(project_dir: Path) -> CheckResult | None:
+    """
+    Check .forge/vercel.json if present.
+
+    Returns None if not configured (optional).
+    WARN if enabled but token missing or project_id empty.
+    PASS if config valid.
+    """
+    vercel_path = project_dir / ".forge" / "vercel.json"
+    if not vercel_path.exists():
+        return None
+
+    from forge.vercel_integration import load_vercel_config, get_vercel_token
+
+    config = load_vercel_config(project_dir)
+    if not config.enabled:
+        return CheckResult(
+            "Vercel Integration", CheckStatus.WARN,
+            "vercel.json exists but integration is disabled",
+            'Set "enabled": true in .forge/vercel.json to activate'
+        )
+
+    issues = []
+    if not config.project_id:
+        issues.append("project_id not set")
+
+    token = get_vercel_token()
+    if not token:
+        issues.append("vercel_token missing from ~/.forge/profile.yaml")
+
+    if issues:
+        return CheckResult(
+            "Vercel Integration", CheckStatus.WARN,
+            f"vercel.json: {'; '.join(issues)}",
+            "Add vercel_token to ~/.forge/profile.yaml and set project_id in .forge/vercel.json"
+        )
+
+    return CheckResult(
+        "Vercel Integration", CheckStatus.PASS,
+        f"project {config.project_id} (token set)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # CI workflow check
 # ---------------------------------------------------------------------------
 
@@ -612,6 +659,11 @@ def run_doctor(project_dir: Path) -> None:
     gh_result = _check_github_config(project_dir)
     if gh_result is not None:
         results.append(gh_result)
+
+    # Vercel config check (optional - only when .forge/vercel.json exists)
+    vercel_result = _check_vercel_config(project_dir)
+    if vercel_result is not None:
+        results.append(vercel_result)
 
     # CI workflow check (optional - only when ci.yml exists)
     ci_result = _check_github_workflow(project_dir)

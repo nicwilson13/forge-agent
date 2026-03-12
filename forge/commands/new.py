@@ -587,6 +587,78 @@ def _offer_workflow_generation(project_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Optional Vercel integration setup
+# ---------------------------------------------------------------------------
+
+def _offer_vercel_setup(project_dir: Path) -> None:
+    """
+    Offer optional Vercel integration setup at end of interview.
+
+    If the user enters a project ID, writes .forge/vercel.json.
+    Prompts for Vercel token and saves to ~/.forge/profile.yaml.
+    """
+    from forge.vercel_integration import VercelConfig, save_vercel_config, get_vercel_token
+
+    print("\n  Would you like to connect Vercel for deployment status checks?")
+    print("  Forge can monitor deployments and auto-fix build failures.")
+    print("  Enter your Vercel project ID (from Project Settings), or press Enter to skip:")
+
+    try:
+        answer = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if not answer:
+        return
+
+    project_id = answer
+
+    # Optionally ask for team ID
+    print("  Enter your Vercel team ID (or press Enter to skip):")
+    try:
+        team_id = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        team_id = ""
+
+    config = VercelConfig(
+        enabled=True,
+        project_id=project_id,
+        team_id=team_id,
+    )
+    save_vercel_config(project_dir, config)
+    print(f"  {SYM_OK} Wrote .forge/vercel.json for project {project_id}")
+
+    # Check for existing token
+    existing_token = get_vercel_token()
+    if existing_token:
+        print(f"  {SYM_OK} Vercel token already set in profile")
+        print()
+        return
+
+    print("\n  Enter your Vercel API token (or press Enter to skip):")
+    print("  (Create one at vercel.com/account/tokens)")
+
+    try:
+        token = input("  > ").strip()
+    except KeyboardInterrupt:
+        print()
+        return
+
+    if token:
+        from forge.profile import load_profile, save_profile
+        profile = load_profile()
+        profile["vercel_token"] = token
+        save_profile(profile)
+        print(f"  {SYM_OK} Vercel token saved to ~/.forge/profile.yaml")
+    else:
+        print(f"  {SYM_WARN} No token set - add vercel_token to ~/.forge/profile.yaml later")
+
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -658,6 +730,9 @@ def run_new(project_dir: Path, description: Optional[str] = None) -> None:
 
     # Optional GitHub Actions workflow generation
     _offer_workflow_generation(project_dir)
+
+    # Optional Vercel integration setup
+    _offer_vercel_setup(project_dir)
 
     # Create .forge dir
     forge_dir = project_dir / ".forge"

@@ -67,6 +67,8 @@ class Phase:
     completed_at: Optional[str] = None
     github_milestone: Optional[int] = None
     github_pr: Optional[int] = None
+    vercel_deployment_url: str = ""
+    vercel_deployment_status: str = ""
 
     @staticmethod
     def new(title: str, description: str) -> "Phase":
