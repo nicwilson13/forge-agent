@@ -127,6 +127,11 @@ def main():
         metavar="N",
         help="Number of recent log entries to show (default: 20)",
     )
+    status_p.add_argument(
+        "--health",
+        action="store_true",
+        help="Show build health metrics and grade",
+    )
 
     # forge checkin
     subparsers.add_parser("checkin", help="Interactively resolve NEEDS_HUMAN items")
@@ -168,7 +173,8 @@ def main():
     elif args.command == "status":
         from forge.commands.status import run_status
         run_status(project_dir, show_cost=args.cost,
-                   show_log=args.log, log_tail=args.log_tail)
+                   show_log=args.log, log_tail=args.log_tail,
+                   show_health=args.health)
 
     elif args.command == "checkin":
         from forge.commands.checkin import run_checkin

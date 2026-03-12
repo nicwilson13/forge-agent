@@ -8,7 +8,8 @@ from forge.build_logger import read_log
 
 
 def run_status(project_dir: Path, show_cost: bool = False,
-               show_log: bool = False, log_tail: int = 20):
+               show_log: bool = False, log_tail: int = 20,
+               show_health: bool = False):
     state = load_state(project_dir)
 
     if not state.initialized:
@@ -57,6 +58,14 @@ def run_status(project_dir: Path, show_cost: bool = False,
         tracker = CostTracker(project_dir)
         tracker.load_from_log()
         print(tracker.format_cost_report(state))
+
+    # Health report
+    if show_health:
+        from forge.health import compute_health_report, format_health_report
+        events = read_log(project_dir, event_filter="session_started", limit=1)
+        session_id = events[-1]["session"] if events else "unknown"
+        report = compute_health_report(project_dir, session_id)
+        print(format_health_report(report))
 
     # Build log (after cost report, before final newline)
     if show_log:

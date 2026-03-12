@@ -226,6 +226,11 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
         duration_secs=build_duration,
     )
 
+    from forge.health import compute_health_report, format_health_summary_line
+    report = compute_health_report(project_dir, logger.session_id)
+    print()
+    print(f"  {format_health_summary_line(report)}")
+
 
 # ---------------------------------------------------------------------------
 # Initial setup
