@@ -8,6 +8,8 @@ setup(
     python_requires=">=3.10",
     install_requires=[
         "anthropic>=0.40.0",
+        "claude-code-sdk>=0.0.9",
+        "anyio>=4.0.0",
     ],
     entry_points={
         "console_scripts": [
