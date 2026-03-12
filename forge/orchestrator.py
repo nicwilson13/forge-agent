@@ -18,6 +18,7 @@ import anthropic
 from forge.context_budget import ContextBudget, ContentBlock, DEFAULT_BUDGET, estimate_tokens
 from forge.cost_tracker import TokenUsage, MODEL_OPUS
 from forge.memory import load_memory_context, ensure_memory_dir
+from forge.router import route_orchestrator, log_route
 from forge.retry import (
     FatalAPIError,
     RetryExhaustedError,
@@ -71,14 +72,15 @@ def _classify_anthropic_error(exc: Exception) -> tuple[str, bool, str]:
     return ("UNKNOWN", False, "")
 
 
-def _chat(system: str, user: str, max_tokens: int = 4096) -> tuple[str, TokenUsage]:
+def _chat(system: str, user: str, max_tokens: int = 4096,
+          model: str = MODEL_OPUS) -> tuple[str, TokenUsage]:
     last_error_str = ""
     last_prefix = "UNKNOWN"
 
     for attempt in range(MAX_RETRIES):
         try:
             resp = _client().messages.create(
-                model="claude-opus-4-5",
+                model=model,
                 max_tokens=max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": user}],
@@ -86,7 +88,7 @@ def _chat(system: str, user: str, max_tokens: int = 4096) -> tuple[str, TokenUsa
             usage = TokenUsage(
                 input_tokens=resp.usage.input_tokens,
                 output_tokens=resp.usage.output_tokens,
-                model=MODEL_OPUS,
+                model=model,
             )
             return resp.content[0].text.strip(), usage
         except (
@@ -121,10 +123,11 @@ def _chat(system: str, user: str, max_tokens: int = 4096) -> tuple[str, TokenUsa
     )
 
 
-def _json_chat(system: str, user: str, max_tokens: int = 4096) -> tuple[dict | list, TokenUsage]:
+def _json_chat(system: str, user: str, max_tokens: int = 4096,
+               model: str = MODEL_OPUS) -> tuple[dict | list, TokenUsage]:
     """Call API and parse JSON from the response. Returns (parsed_json, usage)."""
     system_with_json = system + "\n\nYou MUST respond with valid JSON only. No prose, no markdown fences."
-    raw, usage = _chat(system_with_json, user, max_tokens)
+    raw, usage = _chat(system_with_json, user, max_tokens, model=model)
     # Strip accidental markdown fences
     raw = raw.strip()
     if raw.startswith("```"):
@@ -161,6 +164,9 @@ Return a JSON array of phase objects:
 
 
 def generate_phases(project_dir: Path) -> Tuple[List[Phase], TokenUsage]:
+    model = route_orchestrator("generate_phases")
+    log_route("generate_phases", model, "structured list")
+
     vision = _read_doc(project_dir, "VISION.md")
     requirements = _read_doc(project_dir, "REQUIREMENTS.md")
     claude_md = _read_doc(project_dir, "CLAUDE.md")
@@ -175,7 +181,7 @@ REQUIREMENTS.md:
 CLAUDE.md (constraints + preferences):
 {claude_md}
 """
-    raw_phases, usage = _json_chat(PHASE_SYSTEM, user)
+    raw_phases, usage = _json_chat(PHASE_SYSTEM, user, model=model)
     return [Phase.new(p["title"], p["description"]) for p in raw_phases], usage
 
 
@@ -209,6 +215,9 @@ Return a JSON array:
 
 
 def generate_tasks(project_dir: Path, phase: Phase, state: ForgeState) -> Tuple[List[Task], TokenUsage]:
+    model = route_orchestrator("generate_tasks")
+    log_route("generate_tasks", model, "moderate complexity")
+
     vision = _read_doc(project_dir, "VISION.md")
     arch = _read_doc(project_dir, "ARCHITECTURE.md")
     claude_md = _read_doc(project_dir, "CLAUDE.md")
@@ -237,7 +246,7 @@ Now generate tasks for this phase:
 Title: {phase.title}
 Description: {phase.description}
 """
-    raw_tasks, usage = _json_chat(TASK_SYSTEM, user)
+    raw_tasks, usage = _json_chat(TASK_SYSTEM, user, model=model)
     tasks = []
     for t in raw_tasks:
         desc = t["description"]
@@ -269,6 +278,9 @@ Keep it focused and scannable. Max 600 words.
 
 
 def write_architecture(project_dir: Path, phases: List[Phase]) -> TokenUsage:
+    model = route_orchestrator("write_architecture")
+    log_route("write_architecture", model, "high stakes")
+
     vision = _read_doc(project_dir, "VISION.md")
     requirements = _read_doc(project_dir, "REQUIREMENTS.md")
     claude_md = _read_doc(project_dir, "CLAUDE.md")
@@ -287,7 +299,7 @@ CLAUDE.md:
 Planned phases:
 {phases_summary}
 """
-    arch_content, usage = _chat(ARCH_SYSTEM, user)
+    arch_content, usage = _chat(ARCH_SYSTEM, user, model=model)
     arch_path = project_dir / "ARCHITECTURE.md"
     arch_path.write_text(arch_content)
     print(f"  [forge] Wrote ARCHITECTURE.md")
@@ -399,6 +411,9 @@ Return JSON:
 
 
 def evaluate_qa(task: Task, test_output: str, error_output: str) -> Tuple[bool, str, str, TokenUsage]:
+    model = route_orchestrator("evaluate_qa")
+    log_route("evaluate_qa", model, "high stakes")
+
     user = f"""
 Task: {task.title}
 Description: {task.description}
@@ -409,7 +424,7 @@ Test output:
 Errors:
 {error_output[-2000:] if error_output else 'None'}
 """
-    result, usage = _json_chat(QA_EVAL_SYSTEM, user)
+    result, usage = _json_chat(QA_EVAL_SYSTEM, user, model=model)
     passed = result.get("passed", False)
     summary = result.get("summary", "")
     retry_prompt = result.get("retry_prompt") or ""
@@ -437,6 +452,9 @@ Return JSON:
 
 
 def evaluate_phase(project_dir: Path, phase: Phase) -> Tuple[bool, str, TokenUsage]:
+    model = route_orchestrator("evaluate_phase")
+    log_route("evaluate_phase", model, "moderate")
+
     done_tasks = [t for t in phase.tasks if t.status == "done"]
     task_summary = "\n".join(f"- {t.title}: {t.notes or 'completed'}" for t in done_tasks)
     arch = _read_doc(project_dir, "ARCHITECTURE.md")
@@ -458,7 +476,7 @@ Completed tasks:
 Architecture:
 {allocated["arch"]}
 """
-    result, usage = _json_chat(PHASE_QA_SYSTEM, user)
+    result, usage = _json_chat(PHASE_QA_SYSTEM, user, model=model)
     approved = result.get("approved", False)
     notes = result.get("notes", "")
     if result.get("blocking_issues"):

@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from forge import orchestrator, builder, git_utils, needs_human, display, checkpoint
+from forge.router import route_task, log_route
 from forge.build_logger import BuildLogger
 from forge.cost_tracker import CostTracker, TokenUsage, calculate_task_cost
 from forge.memory import (
@@ -334,9 +335,19 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
     # Build the prompt
     prompt = orchestrator.build_task_prompt(project_dir, phase, task)
 
+    # Determine model for this task
+    model, reason = route_task(
+        task.title,
+        task.description,
+        retry_count=task.retry_count,
+        previous_model=task.last_model or None,
+    )
+    log_route(f"task: {task.title[:20]}", model, reason)
+    task.last_model = model
+
     # Call Claude Code
     try:
-        success, stdout, stderr, duration = builder.run_task(project_dir, prompt)
+        success, stdout, stderr, duration = builder.run_task(project_dir, prompt, model=model)
     except FatalAPIError as e:
         _clear_interrupt_handler()
         _handle_fatal_error(project_dir, state, task, e, logger)

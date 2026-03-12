@@ -68,7 +68,8 @@ def _format_stream_line(message_type: str, content: str) -> str | None:
     return None
 
 
-async def _run_task_async(project_dir: Path, prompt: str) -> Tuple[bool, str, str, float]:
+async def _run_task_async(project_dir: Path, prompt: str,
+                         model: str | None = None) -> Tuple[bool, str, str, float]:
     """
     Execute a single task via the Claude Code SDK async query().
 
@@ -78,6 +79,7 @@ async def _run_task_async(project_dir: Path, prompt: str) -> Tuple[bool, str, st
     Args:
         project_dir: The project directory to run in.
         prompt: The full task prompt for Claude Code.
+        model: Optional model override for Claude Code.
 
     Returns:
         A tuple of (success, full_output, error_message, duration_seconds).
@@ -92,6 +94,7 @@ async def _run_task_async(project_dir: Path, prompt: str) -> Tuple[bool, str, st
     options = ClaudeCodeOptions(
         cwd=str(project_dir),
         max_turns=MAX_TURNS,
+        model=model,
     )
 
     output_parts: list[str] = []
@@ -183,7 +186,8 @@ async def _run_task_async(project_dir: Path, prompt: str) -> Tuple[bool, str, st
         return False, "", f"CONNECTION_ERROR: {e}", time.time() - start_time
 
 
-def run_task(project_dir: Path, prompt: str) -> Tuple[bool, str, str, float]:
+def run_task(project_dir: Path, prompt: str,
+             model: str | None = None) -> Tuple[bool, str, str, float]:
     """
     Run a single task via Claude Code SDK with streaming output.
 
@@ -193,6 +197,7 @@ def run_task(project_dir: Path, prompt: str) -> Tuple[bool, str, str, float]:
     Args:
         project_dir: The project directory to execute in.
         prompt: The full task prompt for Claude Code.
+        model: Optional model override for Claude Code SDK.
 
     Returns:
         A tuple of (success, stdout, stderr, duration_seconds) where:
@@ -209,7 +214,10 @@ def run_task(project_dir: Path, prompt: str) -> Tuple[bool, str, str, float]:
 
     print(f"\n  [builder] Invoking Claude Code (SDK streaming)...")
 
-    return anyio.run(_run_task_async, project_dir, prompt)
+    async def _run():
+        return await _run_task_async(project_dir, prompt, model=model)
+
+    return anyio.run(_run)
 
 
 def run_tests(project_dir: Path) -> Tuple[bool, str, str]:

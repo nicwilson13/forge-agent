@@ -44,6 +44,7 @@ class Task:
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     completed_at: Optional[str] = None
     commit_hash: Optional[str] = None
+    last_model: str = ""
 
     @staticmethod
     def new(title: str, description: str, phase_id: str) -> "Task":
