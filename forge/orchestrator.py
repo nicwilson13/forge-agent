@@ -500,11 +500,29 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
                 truncatable=True,
             ))
 
+    DEPLOY_SIGNALS = [
+        "deploy", "vercel", "production", "environment variable", "env var",
+        "ci", "cd", "pipeline", "build", "preview", "staging",
+        "domain", "dns", "edge", "serverless", "cron",
+        "github actions", "workflow", "monitoring", "sentry",
+    ]
+
+    if any(sig in task_text for sig in DEPLOY_SIGNALS):
+        deploy_skill_path = skills_dir / "deploy.md"
+        if deploy_skill_path.exists():
+            deploy_skill = deploy_skill_path.read_text()
+            budget.add(ContentBlock(
+                name="deploy_skill",
+                content=deploy_skill,
+                priority=7,
+                truncatable=True,
+            ))
+
     allocated = budget.allocate()
 
     # Collect injected skill content
     skill_parts = []
-    for key in ("frontend_skill", "database_skill", "auth_skill", "payments_skill"):
+    for key in ("frontend_skill", "database_skill", "auth_skill", "payments_skill", "deploy_skill"):
         content = allocated.get(key, "")
         if content:
             skill_parts.append(content)
