@@ -271,7 +271,7 @@ def _detect_test_command(project_dir: Path) -> list:
     if pkg.exists():
         import json
         try:
-            data = json.loads(pkg.read_text())
+            data = json.loads(pkg.read_text(encoding="utf-8"))
             scripts = data.get("scripts", {})
             if "test" in scripts:
                 mgr = "pnpm" if (p / "pnpm-lock.yaml").exists() else \
@@ -343,7 +343,7 @@ def _detect_build_command(project_dir: Path) -> list:
     if pkg.exists():
         import json
         try:
-            data = json.loads(pkg.read_text())
+            data = json.loads(pkg.read_text(encoding="utf-8"))
             scripts = data.get("scripts", {})
             if "build" in scripts:
                 mgr = "pnpm" if (p / "pnpm-lock.yaml").exists() else \

@@ -139,7 +139,7 @@ def load_state(project_dir: Path) -> ForgeState:
     path = _state_path(project_dir)
     if not path.exists():
         return ForgeState()
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         raw = json.load(f)
 
     phases = []
@@ -167,5 +167,5 @@ def save_state(project_dir: Path, state: ForgeState):
             return d
         raise TypeError(f"Not serialisable: {type(obj)}")
 
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(asdict(state), f, indent=2, default=str)

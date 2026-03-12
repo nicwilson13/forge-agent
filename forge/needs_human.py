@@ -33,7 +33,7 @@ def _path(project_dir: Path) -> Path:
 
 def read_raw(project_dir: Path) -> str:
     p = _path(project_dir)
-    return p.read_text() if p.exists() else ""
+    return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
 def append_item(project_dir: Path, task: Task, reason: str):

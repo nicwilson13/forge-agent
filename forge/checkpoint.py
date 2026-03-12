@@ -43,7 +43,7 @@ def atomic_save(project_dir: Path, state: ForgeState) -> None:
     target = _state_path(project_dir)
 
     try:
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(asdict(state), f, indent=2, default=str)
         tmp.replace(target)
     finally:

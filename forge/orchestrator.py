@@ -309,7 +309,7 @@ Description: {phase.description}
 {linear_context}
 """
     mcp_servers = mcp_config.to_api_format("task_generation") if mcp_config else None
-    raw_tasks, usage = _json_chat(TASK_SYSTEM, user, model=model,
+    raw_tasks, usage = _json_chat(TASK_SYSTEM, user, max_tokens=16384, model=model,
                                   mcp_servers=mcp_servers or None,
                                   project_dir=project_dir,
                                   operation="generate_tasks")
@@ -483,7 +483,7 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
     if any(sig in task_text for sig in FRONTEND_SIGNALS):
         fe_skill_path = skills_dir / "frontend-design.md"
         if fe_skill_path.exists():
-            fe_skill = fe_skill_path.read_text()
+            fe_skill = fe_skill_path.read_text(encoding="utf-8")
             budget.add(ContentBlock(
                 name="frontend_skill",
                 content=fe_skill,
@@ -494,7 +494,7 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
     if any(sig in task_text for sig in DATABASE_SIGNALS):
         db_skill_path = skills_dir / "database.md"
         if db_skill_path.exists():
-            db_skill = db_skill_path.read_text()
+            db_skill = db_skill_path.read_text(encoding="utf-8")
             budget.add(ContentBlock(
                 name="database_skill",
                 content=db_skill,
@@ -512,7 +512,7 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
     if any(sig in task_text for sig in AUTH_SIGNALS):
         auth_skill_path = skills_dir / "auth.md"
         if auth_skill_path.exists():
-            auth_skill = auth_skill_path.read_text()
+            auth_skill = auth_skill_path.read_text(encoding="utf-8")
             budget.add(ContentBlock(
                 name="auth_skill",
                 content=auth_skill,
@@ -529,7 +529,7 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
     if any(sig in task_text for sig in PAYMENTS_SIGNALS):
         payments_skill_path = skills_dir / "payments.md"
         if payments_skill_path.exists():
-            payments_skill = payments_skill_path.read_text()
+            payments_skill = payments_skill_path.read_text(encoding="utf-8")
             budget.add(ContentBlock(
                 name="payments_skill",
                 content=payments_skill,
@@ -547,7 +547,7 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
     if any(sig in task_text for sig in DEPLOY_SIGNALS):
         deploy_skill_path = skills_dir / "deploy.md"
         if deploy_skill_path.exists():
-            deploy_skill = deploy_skill_path.read_text()
+            deploy_skill = deploy_skill_path.read_text(encoding="utf-8")
             budget.add(ContentBlock(
                 name="deploy_skill",
                 content=deploy_skill,
@@ -565,7 +565,7 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
     if any(sig in task_text for sig in UI_SIGNALS):
         ui_skill_path = skills_dir / "ui-components.md"
         if ui_skill_path.exists():
-            ui_skill = ui_skill_path.read_text()
+            ui_skill = ui_skill_path.read_text(encoding="utf-8")
             budget.add(ContentBlock(
                 name="ui_skill",
                 content=ui_skill,
@@ -822,5 +822,5 @@ def evaluate_visual_qa(
 def _read_doc(project_dir: Path, filename: str) -> str:
     path = project_dir / filename
     if path.exists():
-        return path.read_text()
+        return path.read_text(encoding="utf-8")
     return f"(No {filename} found)"

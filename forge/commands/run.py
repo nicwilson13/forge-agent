@@ -295,7 +295,9 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
                 completed = await _run_phase_parallel(
                     project_dir, state, phase, loop_guard,
                     max_retries, dry_run, tracker, logger, max_parallel,
-                    mcp_config=mcp_config
+                    mcp_config=mcp_config,
+                    lin_config=lin_config, lin_token=lin_token,
+                    linear_issues=linear_issues
                 )
                 checkpoint.atomic_save(project_dir, state)
                 continue
@@ -800,6 +802,9 @@ async def _run_phase_parallel(
     logger: BuildLogger | None,
     max_parallel: int,
     mcp_config=None,
+    lin_config=None,
+    lin_token: str = "",
+    linear_issues: list | None = None,
 ) -> int:
     """
     Run all pending tasks in a phase using parallel execution.

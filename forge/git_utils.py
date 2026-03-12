@@ -195,9 +195,9 @@ def ensure_gitignore(project_dir: Path):
     gitignore = project_dir / ".gitignore"
     entry = ".forge/\n"
     if gitignore.exists():
-        content = gitignore.read_text()
+        content = gitignore.read_text(encoding="utf-8")
         if ".forge" not in content:
-            with open(gitignore, "a") as f:
+            with open(gitignore, "a", encoding="utf-8") as f:
                 f.write(entry)
     else:
         gitignore.write_text(entry, encoding="utf-8")
