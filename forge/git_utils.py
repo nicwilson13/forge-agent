@@ -158,6 +158,38 @@ def recent_commits(project_dir: Path, n: int = 5) -> list:
     return []
 
 
+def get_diff(project_dir: Path, staged_only: bool = False) -> str:
+    """
+    Return the current git diff as a string.
+
+    staged_only=False: git diff HEAD (all uncommitted changes)
+    staged_only=True:  git diff --cached (staged changes only)
+    Returns empty string on error or if no changes.
+    """
+    if staged_only:
+        cmd = ["git", "diff", "--cached"]
+    else:
+        cmd = ["git", "diff", "HEAD"]
+    code, out, _ = _run(cmd, project_dir)
+    return out if code == 0 else ""
+
+
+def count_diff_lines(diff: str) -> tuple[int, int]:
+    """
+    Count added and removed lines in a diff string.
+    Returns (added, removed).
+    Excludes diff headers (lines starting with +++, ---, @@, diff).
+    """
+    added = 0
+    removed = 0
+    for line in diff.splitlines():
+        if line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+    return (added, removed)
+
+
 def ensure_gitignore(project_dir: Path):
     """Add .forge/ to .gitignore if not already present."""
     gitignore = project_dir / ".gitignore"

@@ -377,6 +377,33 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
             )
             return
 
+    # Semantic diff review (after build, before tests/commit)
+    from forge.diff_review import run_diff_review, format_review_output
+    review_verdict, review_issues, review_usage = run_diff_review(
+        project_dir, task.title, task.description
+    )
+    review_line = format_review_output(review_verdict, review_issues)
+    if review_verdict == "flagged":
+        print(f"  {display.SYM_WARN} {review_line}")
+        if logger:
+            logger.log("diff_review_flagged", phase=state.current_phase_index,
+                       task=task.id, issues=review_issues[:3])
+        if review_issues:
+            task.notes = (task.notes or "") + \
+                f"\nDiff review flags: {'; '.join(review_issues)}"
+    elif review_verdict == "approved":
+        print(f"  {display.SYM_OK} {review_line}")
+        if logger:
+            logger.log("diff_review_approved", phase=state.current_phase_index,
+                       task=task.id)
+    elif review_verdict == "skipped":
+        reason = review_issues[0] if review_issues else "unknown"
+        if reason not in ("no changes", "change too small"):
+            print(f"  ({review_line})")
+        if logger:
+            logger.log("diff_review_skipped", phase=state.current_phase_index,
+                       task=task.id, reason=reason)
+
     # Run tests
     tests_passed, test_out, test_err = builder.run_tests(project_dir)
 
