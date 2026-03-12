@@ -45,6 +45,7 @@ class Task:
     completed_at: Optional[str] = None
     commit_hash: Optional[str] = None
     last_model: str = ""
+    parallel_group: int = 0   # 0 = sequential, N = can run with same group
 
     @staticmethod
     def new(title: str, description: str, phase_id: str) -> "Task":

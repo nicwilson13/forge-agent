@@ -2,12 +2,14 @@
 forge run - The autonomous build loop.
 """
 
+import asyncio
 import signal
 import sys
 import time
 from pathlib import Path
 
 from forge import orchestrator, builder, git_utils, needs_human, display, checkpoint
+from forge.parallel import get_max_parallel, ParallelExecutor, ParallelLocks, TaskResult
 from forge.router import route_task, log_route
 from forge.build_logger import BuildLogger
 from forge.cost_tracker import CostTracker, TokenUsage, calculate_task_cost
@@ -102,7 +104,21 @@ def _handle_retry_exhausted(project_dir: Path, state: ForgeState,
 
 def run_forge(project_dir: Path, checkin_every: int = 10,
               max_retries: int = 3, dry_run: bool = False):
+    """Synchronous public entry point - runs the async loop."""
     _validate_project(project_dir)
+
+    import anyio
+
+    async def _main():
+        await _run_forge_async(project_dir, checkin_every, max_retries, dry_run)
+
+    anyio.run(_main)
+
+
+async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
+                           max_retries: int = 3, dry_run: bool = False):
+    """Async implementation of the build loop."""
+    max_parallel = get_max_parallel()
 
     state = load_state(project_dir)
     loop_guard = LoopGuard(max_retries=max_retries)
@@ -196,6 +212,21 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
             phase_start_time = time.time()
             continue
 
+        # Parallel execution path
+        if max_parallel > 1:
+            pending = [t for t in phase.tasks
+                       if t.status in (TaskStatus.PENDING, TaskStatus.FAILED,
+                                       TaskStatus.INTERRUPTED, TaskStatus.COMMIT_PENDING)]
+            if len(pending) > 1:
+                print(f"\n  Phase {state.current_phase_index + 1}: {phase.title}"
+                      f"  ({len(pending)} tasks, {min(max_parallel, len(pending))} parallel)\n")
+                completed = await _run_phase_parallel(
+                    project_dir, state, phase, loop_guard,
+                    max_retries, dry_run, tracker, logger, max_parallel
+                )
+                checkpoint.atomic_save(project_dir, state)
+                continue
+
         # Check-in gate
         if state.tasks_since_checkin >= checkin_every:
             display.print_checkin_prompt(checkin_every)
@@ -207,9 +238,9 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
             state.tasks_since_checkin = 0
             checkpoint.atomic_save(project_dir, state)
 
-        # Execute the task
-        _execute_task(project_dir, state, phase, task, loop_guard,
-                      max_retries, dry_run, tracker, logger)
+        # Execute the task (sequential)
+        await _execute_task(project_dir, state, phase, task, loop_guard,
+                            max_retries, dry_run, tracker, logger)
         checkpoint.atomic_save(project_dir, state)
 
     build_duration = time.time() - build_start_time
@@ -275,11 +306,12 @@ def _initial_setup(project_dir: Path, state: ForgeState, dry_run: bool):
 # Task execution
 # ---------------------------------------------------------------------------
 
-def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
-                  task: Task, loop_guard: LoopGuard,
-                  max_retries: int, dry_run: bool,
-                  tracker: CostTracker | None = None,
-                  logger: BuildLogger | None = None):
+async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
+                        task: Task, loop_guard: LoopGuard,
+                        max_retries: int, dry_run: bool,
+                        tracker: CostTracker | None = None,
+                        logger: BuildLogger | None = None,
+                        locks: ParallelLocks | None = None):
     task_index = phase.tasks.index(task)
     total_tasks = len(phase.tasks)
 
@@ -295,7 +327,11 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
     if task.status == TaskStatus.COMMIT_PENDING:
         print("  [forge] Retrying commit and push...")
         commit_msg = f"[forge] {task.title} ({task.id})"
-        hash_ = git_utils.commit_and_push(project_dir, commit_msg)
+        if locks:
+            async with locks.git:
+                hash_ = git_utils.commit_and_push(project_dir, commit_msg)
+        else:
+            hash_ = git_utils.commit_and_push(project_dir, commit_msg)
         if hash_:
             task.status = TaskStatus.DONE
             task.commit_hash = hash_
@@ -318,8 +354,13 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
             task.notes = f"Previously interrupted ({task.interrupt_reason}). {task.notes}"
 
     # Mark task as started with checkpoint
-    _setup_interrupt_handler(project_dir, state, task)
-    checkpoint.mark_task_started(project_dir, state, task)
+    if not locks:
+        _setup_interrupt_handler(project_dir, state, task)
+    if locks:
+        async with locks.state:
+            checkpoint.mark_task_started(project_dir, state, task)
+    else:
+        checkpoint.mark_task_started(project_dir, state, task)
     if logger:
         logger.task_started(state.current_phase_index, task.id,
                             task.title, task.retry_count)
@@ -347,17 +388,24 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
 
     # Call Claude Code
     try:
-        success, stdout, stderr, duration = builder.run_task(project_dir, prompt, model=model)
+        builder._check_sdk_available()
+        print(f"\n  [builder] Invoking Claude Code (SDK streaming)...")
+        success, stdout, stderr, duration = await builder._run_task_async(
+            project_dir, prompt, model=model
+        )
     except FatalAPIError as e:
-        _clear_interrupt_handler()
+        if not locks:
+            _clear_interrupt_handler()
         _handle_fatal_error(project_dir, state, task, e, logger)
         return
     except RetryExhaustedError as e:
-        _clear_interrupt_handler()
+        if not locks:
+            _clear_interrupt_handler()
         _handle_retry_exhausted(project_dir, state, task, e)
         return
 
-    _clear_interrupt_handler()
+    if not locks:
+        _clear_interrupt_handler()
 
     # Check for fatal errors in builder stderr
     if not success:
@@ -483,7 +531,11 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
                 builder_prompt_chars=len(prompt),
                 builder_output_chars=len(stdout),
             )
-            alerts = tracker.record_task(task_cost_val)
+            if locks:
+                async with locks.cost:
+                    alerts = tracker.record_task(task_cost_val)
+            else:
+                alerts = tracker.record_task(task_cost_val)
             print(f"  {tracker.format_task_line(task_cost_val)}")
             for alert in alerts:
                 print(f"\n  {display.SYM_WARN} {alert}")
@@ -522,14 +574,22 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
 
         # Commit
         commit_msg = f"[forge] {task.title} ({task.id})"
-        hash_ = git_utils.commit_and_push(project_dir, commit_msg)
+        if locks:
+            async with locks.git:
+                hash_ = git_utils.commit_and_push(project_dir, commit_msg)
+        else:
+            hash_ = git_utils.commit_and_push(project_dir, commit_msg)
         if hash_:
             task.commit_hash = hash_
             if logger:
                 logger.git_committed(hash_, commit_msg)
         else:
             # Commit failed - mark as commit pending
-            checkpoint.mark_task_commit_pending(project_dir, state, task)
+            if locks:
+                async with locks.state:
+                    checkpoint.mark_task_commit_pending(project_dir, state, task)
+            else:
+                checkpoint.mark_task_commit_pending(project_dir, state, task)
             print("  [forge] Checkpoint saved: task done, commit pending.")
             print("  Run `forge run` to retry the commit.")
 
@@ -564,6 +624,53 @@ def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
                     qa_summary or "", task.retry_count,
                     will_retry=task.retry_count < max_retries,
                 )
+
+
+# ---------------------------------------------------------------------------
+# Parallel phase execution
+# ---------------------------------------------------------------------------
+
+async def _run_phase_parallel(
+    project_dir: Path,
+    state: ForgeState,
+    phase: Phase,
+    loop_guard: LoopGuard,
+    max_retries: int,
+    dry_run: bool,
+    tracker: CostTracker | None,
+    logger: BuildLogger | None,
+    max_parallel: int,
+) -> int:
+    """
+    Run all pending tasks in a phase using parallel execution.
+
+    Returns the count of successfully completed tasks.
+    Uses ParallelExecutor with max_parallel concurrency.
+    """
+    executor = ParallelExecutor(max_parallel=max_parallel)
+    pending = [t for t in phase.tasks
+               if t.status in (TaskStatus.PENDING, TaskStatus.FAILED,
+                               TaskStatus.INTERRUPTED, TaskStatus.COMMIT_PENDING)]
+
+    if not pending:
+        return 0
+
+    async def run_one(task, locks, **kwargs) -> TaskResult:
+        start = time.time()
+        try:
+            await _execute_task(
+                project_dir, state, phase, task,
+                loop_guard, max_retries, dry_run,
+                tracker, logger, locks=locks
+            )
+            success = task.status == TaskStatus.DONE
+            return TaskResult(task.id, success, time.time() - start)
+        except Exception as e:
+            return TaskResult(task.id, False, time.time() - start,
+                              error=str(e))
+
+    results = await executor.run_tasks(pending, run_one)
+    return sum(1 for r in results if r.success)
 
 
 # ---------------------------------------------------------------------------
