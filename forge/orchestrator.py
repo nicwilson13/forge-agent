@@ -449,7 +449,8 @@ Previous task notes (if any): {notes}
 """
 
 
-def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
+def build_task_prompt(project_dir: Path, phase: Phase, task: Task,
+                      max_tokens: int | None = None) -> str:
     """Build the task execution prompt with intelligent context budgeting."""
     vision = _read_doc(project_dir, "VISION.md")
     arch = _read_doc(project_dir, "ARCHITECTURE.md")
@@ -463,7 +464,7 @@ def build_task_prompt(project_dir: Path, phase: Phase, task: Task) -> str:
     notes_context = f"Previous task notes: {task.notes or 'None'}"
 
     # Allocate budget across all content blocks
-    budget = ContextBudget(max_tokens=DEFAULT_PROMPT_BUDGET)
+    budget = ContextBudget(max_tokens=max_tokens or DEFAULT_PROMPT_BUDGET)
     budget.add(ContentBlock("task", task_context, priority=1, truncatable=False))
     budget.add(ContentBlock("notes", notes_context, priority=2, truncatable=False))
     budget.add(ContentBlock("arch", arch, priority=3, truncatable=True))

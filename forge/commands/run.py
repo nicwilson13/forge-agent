@@ -732,7 +732,24 @@ async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
     # Check for fatal errors in builder stderr
     if not success:
         prefix = extract_error_prefix(stderr)
-        if is_fatal_error(prefix):
+
+        # Prompt too long: retry once with a reduced context budget
+        if prefix == "PROMPT_TOO_LONG":
+            from forge.context_budget import DEFAULT_BUDGET
+            reduced_budget = DEFAULT_BUDGET // 2
+            print(f"  {display.SYM_WARN} Prompt too long - retrying with reduced context ({reduced_budget} tokens)...")
+            prompt = orchestrator.build_task_prompt(project_dir, phase, task, max_tokens=reduced_budget)
+            success, stdout, stderr, duration = await builder._run_task_async(
+                project_dir, prompt, model=model
+            )
+            if not success:
+                task.status = TaskStatus.FAILED
+                task.notes = (task.notes or "") + "\nPrompt too long even after reduction"
+                if logger:
+                    logger.task_failed(state.current_phase_index, task.id, "prompt_too_long")
+                return
+
+        elif is_fatal_error(prefix):
             _handle_fatal_error(
                 project_dir, state, task,
                 FatalAPIError(

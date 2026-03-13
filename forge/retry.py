@@ -26,7 +26,7 @@ MAX_OFFLINE_ATTEMPTS = 10
 
 # Known error prefixes from builder.py
 _RETRYABLE_PREFIXES = {"RATE_LIMIT", "CONNECTION_ERROR", "TIMEOUT"}
-_FATAL_PREFIXES = {"AUTH_ERROR"}
+_FATAL_PREFIXES = {"AUTH_ERROR", "PROMPT_TOO_LONG"}
 _KNOWN_PREFIXES = _RETRYABLE_PREFIXES | _FATAL_PREFIXES | {"PROCESS_ERROR", "SDK_ERROR"}
 
 # Local Unicode support detection (no forge.display dependency)

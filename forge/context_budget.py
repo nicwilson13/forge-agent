@@ -16,7 +16,7 @@ import sys
 from dataclasses import dataclass
 
 # Default token budget for task prompts
-DEFAULT_BUDGET = 80_000
+DEFAULT_BUDGET = 50_000
 
 # Characters per token estimate (conservative)
 CHARS_PER_TOKEN = 4

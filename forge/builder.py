@@ -267,6 +267,8 @@ async def _run_task_async(project_dir: Path, prompt: str,
             ), elapsed
         if "rate limit" in stderr_text.lower() or "429" in stderr_text:
             return False, "", f"RATE_LIMIT: {e}", elapsed
+        if "prompt" in stderr_text.lower() and "too long" in stderr_text.lower():
+            return False, "", f"PROMPT_TOO_LONG: {e}", elapsed
         return False, "", f"PROCESS_ERROR: {e}", elapsed
     except ClaudeSDKError as e:
         return False, "", f"SDK_ERROR: {e}", time.time() - start_time
