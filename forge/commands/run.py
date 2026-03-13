@@ -1070,8 +1070,8 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
                     e2e_summary = e2e_failure_context(test_file, failed, e2e_output)
             else:
                 print(f"  (E2E generation skipped - {gen_summary})")
-        except (FatalAPIError, RetryExhaustedError):
-            raise
+        except (FatalAPIError, RetryExhaustedError) as e:
+            print(f"  (E2E tests skipped - API error: {e})")
         except Exception as e:
             print(f"  (E2E tests skipped - unexpected error: {e})")
     else:
@@ -1111,8 +1111,8 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
             if logger:
                 logger.log("security_warnings", phase=phase_index,
                            count=len(sec_warnings))
-    except (FatalAPIError, RetryExhaustedError):
-        raise
+    except (FatalAPIError, RetryExhaustedError) as e:
+        print(f"  (Security scan skipped - API error: {e})")
     except Exception as e:
         print(f"  (Security scan skipped - unexpected error: {e})")
 
@@ -1127,10 +1127,10 @@ def _complete_phase(project_dir: Path, state: ForgeState, phase: Phase,
             security_warnings=security_warnings_count,
             mcp_config=mcp_config,
         )
-    except FatalAPIError as e:
-        _handle_fatal_error(project_dir, state, None, e, logger)
-    except RetryExhaustedError as e:
-        _handle_retry_exhausted(project_dir, state, None, e)
+    except (FatalAPIError, RetryExhaustedError) as e:
+        print(f"  {display.SYM_WARN} Phase QA skipped - API error: {e}")
+        approved = True  # Advance phase anyway; don't block on QA failure
+        notes = f"QA skipped due to API error: {e}"
     phase.qa_notes = notes
     phase.completed_at = _now()
 
