@@ -3,6 +3,7 @@ State manager for Forge.
 All build state lives in .forge/state.json inside the project directory.
 """
 
+import dataclasses
 import json
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -135,22 +136,31 @@ def _state_path(project_dir: Path) -> Path:
     return project_dir / ".forge" / "state.json"
 
 
+def _filter_fields(cls, data: dict) -> dict:
+    """Filter dict to only keys that are valid dataclass fields for cls."""
+    valid = {f.name for f in dataclasses.fields(cls)}
+    return {k: v for k, v in data.items() if k in valid}
+
+
 def load_state(project_dir: Path) -> ForgeState:
     path = _state_path(project_dir)
     if not path.exists():
         return ForgeState()
-    with open(path, encoding="utf-8") as f:
-        raw = json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"  [state] WARNING: Corrupted state file, starting fresh: {e}")
+        return ForgeState()
 
     phases = []
     for p_raw in raw.get("phases", []):
-        tasks = [Task(**t) for t in p_raw.pop("tasks", [])]
-        phase = Phase(**p_raw)
+        tasks = [Task(**_filter_fields(Task, t)) for t in p_raw.pop("tasks", [])]
+        phase = Phase(**_filter_fields(Phase, p_raw))
         phase.tasks = tasks
         phases.append(phase)
 
-    raw["phases"] = phases
-    state = ForgeState(**{k: v for k, v in raw.items() if k != "phases"})
+    state = ForgeState(**_filter_fields(ForgeState, {k: v for k, v in raw.items() if k != "phases"}))
     state.phases = phases
     return state
 

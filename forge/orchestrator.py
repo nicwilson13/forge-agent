@@ -151,17 +151,30 @@ def _json_chat(system: str, user: str, max_tokens: int = 4096,
                mcp_servers: list[dict] | None = None,
                project_dir: Path | None = None,
                operation: str = "") -> tuple[dict | list, TokenUsage]:
-    """Call API and parse JSON from the response. Returns (parsed_json, usage)."""
+    """Call API and parse JSON from the response. Returns (parsed_json, usage).
+
+    Retries once on JSON parse failure (LLMs occasionally return prose).
+    """
     system_with_json = system + "\n\nYou MUST respond with valid JSON only. No prose, no markdown fences."
-    raw, usage = _chat(system_with_json, user, max_tokens, model=model,
-                       mcp_servers=mcp_servers,
-                       project_dir=project_dir, operation=operation)
-    # Strip accidental markdown fences
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1]
-        raw = raw.rsplit("```", 1)[0]
-    return json.loads(raw), usage
+
+    last_error: json.JSONDecodeError | None = None
+    for json_attempt in range(2):
+        raw, usage = _chat(system_with_json, user, max_tokens, model=model,
+                           mcp_servers=mcp_servers,
+                           project_dir=project_dir, operation=operation)
+        # Strip accidental markdown fences
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1]
+            raw = raw.rsplit("```", 1)[0]
+        try:
+            return json.loads(raw), usage
+        except json.JSONDecodeError as e:
+            last_error = e
+            if json_attempt == 0:
+                print(f"  [orchestrator] JSON parse failed, retrying: {e}")
+
+    raise last_error  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------

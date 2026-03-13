@@ -52,7 +52,9 @@ def _check_python_version() -> CheckResult:
 
 def _check_claude_code_installed() -> CheckResult:
     """Check Claude Code CLI is on PATH."""
-    path = shutil.which("claude")
+    from forge.builder import find_claude_cli
+
+    path = find_claude_cli()
     if not path:
         return CheckResult("Claude Code CLI", CheckStatus.FAIL,
                            "not found on PATH",
@@ -60,7 +62,7 @@ def _check_claude_code_installed() -> CheckResult:
                            "     then run: claude (and complete login)")
     try:
         result = subprocess.run(
-            ["claude", "--version"],
+            [path, "--version"],
             capture_output=True, text=True, timeout=30,
         )
         version = result.stdout.strip() or "unknown version"

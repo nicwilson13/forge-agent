@@ -293,23 +293,13 @@ def _read_memory_file(project_dir: Path, filename: str) -> str:
 
 def _atomic_append(filepath: Path, content: str) -> None:
     """
-    Append content to a file atomically.
-    Reads existing content, appends new content, writes via temp file.
+    Append content to a file.
+    Uses append mode to avoid read-modify-write race conditions
+    when multiple parallel tasks write memory simultaneously.
     """
-    existing = ""
-    if filepath.exists():
-        existing = filepath.read_text(encoding="utf-8")
-
-    new_content = existing + content
-    tmp = filepath.with_suffix(".tmp")
-    try:
-        tmp.write_text(new_content, encoding="utf-8")
-        tmp.replace(filepath)
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    with open(filepath, "a", encoding="utf-8") as f:
+        f.write(content)
 
 
 def _init_file(filepath: Path, header: str) -> None:

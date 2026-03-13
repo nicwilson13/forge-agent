@@ -114,10 +114,21 @@ class ParallelExecutor:
                         wave_results.append(result)
                 return result
 
-            await asyncio.gather(
+            gather_results = await asyncio.gather(
                 *[run_one(t) for t in wave_tasks],
                 return_exceptions=True
             )
+            # Check for exceptions that bypassed wave_results
+            for i, gr in enumerate(gather_results):
+                if isinstance(gr, BaseException):
+                    task_id = wave_tasks[i].id if hasattr(wave_tasks[i], "id") else f"wave{wave_num}-{i}"
+                    print(f"  [parallel] Task {task_id} raised: {gr}")
+                    wave_results.append(TaskResult(
+                        task_id=task_id,
+                        success=False,
+                        duration=0.0,
+                        error=f"UNHANDLED: {type(gr).__name__}: {gr}",
+                    ))
             all_results.extend(wave_results)
 
         return all_results

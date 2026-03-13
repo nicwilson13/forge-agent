@@ -21,6 +21,55 @@ TASK_TIMEOUT = 600      # 10 minutes
 MAX_TURNS = 50          # max back-and-forth turns in one task
 
 
+def find_claude_cli() -> str | None:
+    """Locate the Claude Code CLI executable.
+
+    Tries shutil.which() first, then platform-specific fallback paths
+    for when the CLI is installed globally via npm but not on the
+    current PATH (e.g. inside a Python virtualenv).
+
+    Returns the absolute path string, or None if not found.
+    """
+    import os
+
+    # 1. Standard PATH lookup
+    path = shutil.which("claude")
+    if path:
+        return path
+
+    # 2. On Windows, npm installs .cmd wrappers
+    if sys.platform == "win32":
+        path = shutil.which("claude.cmd")
+        if path:
+            return path
+
+    # 3. Platform-specific fallback locations
+    candidates: list[Path] = []
+
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA", "")
+        if appdata:
+            candidates.append(Path(appdata) / "npm" / "claude.cmd")
+            candidates.append(Path(appdata) / "npm" / "claude")
+        progfiles = os.environ.get("PROGRAMFILES", "")
+        if progfiles:
+            candidates.append(Path(progfiles) / "nodejs" / "claude.cmd")
+    else:
+        home = Path.home()
+        candidates.extend([
+            home / ".npm-global" / "bin" / "claude",
+            Path("/usr/local/bin/claude"),
+            home / ".local" / "bin" / "claude",
+            home / ".yarn" / "bin" / "claude",
+        ])
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+
+    return None
+
+
 def _check_sdk_available() -> None:
     """Verify the Claude Code SDK is importable. Exit with a helpful message if not."""
     global _SDK_AVAILABLE
@@ -100,7 +149,7 @@ async def _run_task_async(project_dir: Path, prompt: str,
     )
 
     # Resolve CLI path once so parallel tasks don't race on shutil.which
-    cli_path = shutil.which("claude")
+    cli_path = find_claude_cli()
 
     output_parts: list[str] = []
     start_time = time.time()

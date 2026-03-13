@@ -128,8 +128,8 @@ def calculate_task_cost(
     builder_prompt_chars and builder_output_chars are character counts.
     Uses CHARS_PER_TOKEN estimate and MODEL_SONNET pricing for builder.
     """
-    builder_input = max(1, builder_prompt_chars // CHARS_PER_TOKEN)
-    builder_output = max(1, builder_output_chars // CHARS_PER_TOKEN)
+    builder_input = max(1, (builder_prompt_chars + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN)
+    builder_output = max(1, (builder_output_chars + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN)
     builder_usage = TokenUsage(builder_input, builder_output, MODEL_SONNET)
 
     total = orchestrator_usage.estimated_cost + builder_usage.estimated_cost
@@ -342,21 +342,6 @@ class CostTracker:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "cost_log.jsonl"
 
-        # Read existing content
-        existing = ""
-        if log_path.exists():
-            existing = log_path.read_text(encoding="utf-8")
-
         new_line = json.dumps(task_cost.to_dict(), default=str) + "\n"
-        new_content = existing + new_line
-
-        # Atomic write
-        tmp = log_path.with_suffix(".tmp")
-        try:
-            tmp.write_text(new_content, encoding="utf-8")
-            tmp.replace(log_path)
-        finally:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(new_line)

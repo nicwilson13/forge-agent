@@ -140,3 +140,60 @@ def test_run_task_error_flow():
         assert success is False
         assert "PROCESS_ERROR" in stderr
         assert duration == 5.0
+
+
+# ---------------------------------------------------------------------------
+# Tests: find_claude_cli
+# ---------------------------------------------------------------------------
+
+def test_find_claude_cli_on_path():
+    """Returns path from shutil.which when claude is on PATH."""
+    from forge.builder import find_claude_cli
+
+    with patch("shutil.which", return_value="/usr/bin/claude"):
+        assert find_claude_cli() == "/usr/bin/claude"
+
+
+def test_find_claude_cli_windows_cmd_fallback(monkeypatch):
+    """Falls back to claude.cmd on Windows."""
+    from forge.builder import find_claude_cli
+
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    def which_side_effect(name):
+        if name == "claude.cmd":
+            return r"C:\Users\me\AppData\Roaming\npm\claude.cmd"
+        return None
+
+    with patch("shutil.which", side_effect=which_side_effect):
+        result = find_claude_cli()
+        assert result == r"C:\Users\me\AppData\Roaming\npm\claude.cmd"
+
+
+def test_find_claude_cli_windows_appdata_fallback(monkeypatch, tmp_path):
+    """Falls back to %APPDATA%\\npm\\claude.cmd on Windows."""
+    from forge.builder import find_claude_cli
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    # Create fake claude.cmd in a fake APPDATA/npm dir
+    npm_dir = tmp_path / "npm"
+    npm_dir.mkdir()
+    claude_cmd = npm_dir / "claude.cmd"
+    claude_cmd.write_text("@echo off")
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+
+    with patch("shutil.which", return_value=None):
+        result = find_claude_cli()
+        assert result == str(claude_cmd)
+
+
+def test_find_claude_cli_not_found(monkeypatch):
+    """Returns None when claude is not found anywhere."""
+    from forge.builder import find_claude_cli
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", "/nonexistent")
+    monkeypatch.setenv("PROGRAMFILES", "/nonexistent")
+
+    with patch("shutil.which", return_value=None):
+        assert find_claude_cli() is None

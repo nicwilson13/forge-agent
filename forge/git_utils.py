@@ -63,7 +63,10 @@ def push(project_dir: Path) -> bool:
 
     # Get current branch
     _, branch, _ = _run(["git", "branch", "--show-current"], project_dir)
-    branch = branch.strip() or "main"
+    branch = branch.strip()
+    if not branch:
+        print("  [git] Cannot push: detached HEAD (no branch checked out)")
+        return False
 
     code, _, err = _run(["git", "push", "origin", branch], project_dir)
     if code != 0:
@@ -140,7 +143,10 @@ def force_push(project_dir: Path) -> bool:
     if not has_remote(project_dir):
         return False
     _, branch, _ = _run(["git", "branch", "--show-current"], project_dir)
-    branch = branch.strip() or "main"
+    branch = branch.strip()
+    if not branch:
+        print("  [git] Cannot force push: detached HEAD (no branch checked out)")
+        return False
     code, _, err = _run(["git", "push", "origin", branch, "--force"], project_dir)
     if code != 0:
         print(f"  [git] Force push failed: {err}")
@@ -193,11 +199,16 @@ def count_diff_lines(diff: str) -> tuple[int, int]:
 def ensure_gitignore(project_dir: Path):
     """Add .forge/ to .gitignore if not already present."""
     gitignore = project_dir / ".gitignore"
-    entry = ".forge/\n"
+    entry = ".forge/"
     if gitignore.exists():
         content = gitignore.read_text(encoding="utf-8")
-        if ".forge" not in content:
-            with open(gitignore, "a", encoding="utf-8") as f:
-                f.write(entry)
+        # Check for exact line match, not substring
+        if any(line.strip() == entry for line in content.splitlines()):
+            return
+        # Ensure we start on a new line
+        if content and not content.endswith("\n"):
+            content += "\n"
+        with open(gitignore, "w", encoding="utf-8") as f:
+            f.write(content + entry + "\n")
     else:
-        gitignore.write_text(entry, encoding="utf-8")
+        gitignore.write_text(entry + "\n", encoding="utf-8")

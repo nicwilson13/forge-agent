@@ -194,11 +194,16 @@ def _parse_review_response(text: str) -> tuple[str, list[str]]:
 
     if first == "FLAGGED":
         issues = []
-        for line in lines[2:]:  # skip FLAGGED line and summary
+        # Skip FLAGGED line and optional summary line
+        start = min(2, len(lines))
+        for line in lines[start:]:
             line = line.strip()
             if line.startswith("- "):
                 issues.append(line[2:])
-        return "flagged", issues
+        if not issues and len(lines) > 1:
+            # If no bullet points found, use the summary line as the issue
+            issues.append(lines[1].strip())
+        return "flagged", issues if issues else ["Flagged without details"]
 
     # Unexpected format - treat as approved to avoid false negatives
     return "approved", []

@@ -76,7 +76,11 @@ def _json_chat(system: str, user: str, max_tokens: int = 4096) -> dict | list:
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1]
         raw = raw.rsplit("```", 1)[0]
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"  [new] Warning: Could not parse AI response as JSON: {e}")
+        return {}
 
 
 def _prompt(question: str) -> str:
