@@ -98,6 +98,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
         pass  # suppress default access logs
 
     def do_GET(self):
+        try:
+            self._route_get()
+        except Exception as exc:
+            self._send_error(exc)
+
+    def do_POST(self):
+        try:
+            self._route_post()
+        except Exception as exc:
+            self._send_error(exc)
+
+    def _send_error(self, exc: Exception):
+        """Send a 500 JSON error response. Never raises."""
+        try:
+            body = json.dumps({"status": "error", "error": str(exc)}).encode()
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception:
+            pass
+
+    def _route_get(self):
         if self.path == "/":
             self._serve_html()
         elif self.path == "/state":
@@ -144,7 +168,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def do_POST(self):
+    def _route_post(self):
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
         if self.path == "/setup/submit":
