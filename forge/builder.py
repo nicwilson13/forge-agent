@@ -218,7 +218,8 @@ async def _run_task_async(project_dir: Path, prompt: str,
         full_output = "\n".join(output_parts)
         return True, full_output, "", elapsed
 
-    except CLINotFoundError:
+    except CLINotFoundError as e:
+        print(f"  [debug] CLINotFoundError: {e}, cli_path={cli_path}")
         return False, "", (
             "AUTH_ERROR: Claude Code CLI not found. "
             "Install it: https://docs.anthropic.com/en/docs/claude-code"
