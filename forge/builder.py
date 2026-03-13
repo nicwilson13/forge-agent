@@ -170,6 +170,11 @@ async def _run_task_async(project_dir: Path, prompt: str,
         cwd=str(project_dir),
         max_turns=MAX_TURNS,
         model=model,
+        system_prompt=(
+            "You are working in a project managed by Forge. "
+            "Read and follow the CLAUDE.md file in the project root for all conventions and constraints. "
+            "Run /init at the start to load project context."
+        ),
     )
 
     # Resolve CLI path once so parallel tasks don't race on shutil.which

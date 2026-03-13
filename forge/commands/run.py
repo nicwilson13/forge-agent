@@ -194,7 +194,8 @@ class _TeeWriter:
 
 
 def run_forge(project_dir: Path, checkin_every: int = 10,
-              max_retries: int = 3, dry_run: bool = False):
+              max_retries: int = 3, dry_run: bool = False,
+              dashboard_port: int = 3333, continuous: bool = True):
     """Synchronous public entry point - runs the async loop."""
     # Force line-buffered stdout so output appears immediately in piped
     # contexts (e.g. VS Code Claude Code extension).
@@ -223,7 +224,9 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
         import anyio
 
         async def _main():
-            await _run_forge_async(project_dir, checkin_every, max_retries, dry_run)
+            await _run_forge_async(project_dir, checkin_every, max_retries, dry_run,
+                                   dashboard_port=dashboard_port,
+                                   continuous=continuous)
 
         anyio.run(_main)
     except _BuildLoopExit as e:
@@ -252,7 +255,9 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
 
 
 async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
-                           max_retries: int = 3, dry_run: bool = False):
+                           max_retries: int = 3, dry_run: bool = False,
+                           dashboard_port: int = 3333,
+                           continuous: bool = True):
     """Async implementation of the build loop."""
     max_parallel = get_max_parallel()
 
@@ -284,7 +289,7 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
     # Start web dashboard (register atexit so it stops even on crash)
     import atexit
     from forge.dashboard import start_dashboard, stop_dashboard, update_dashboard_state
-    dashboard_thread = start_dashboard(project_dir, run_mode=True)
+    dashboard_thread = start_dashboard(project_dir, port=dashboard_port, run_mode=True)
     atexit.register(stop_dashboard)
 
     if dry_run:
@@ -338,12 +343,15 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
     )
 
     # -----------------------------------------------------------------------
-    # Main loop
+    # Main loop (outer loop re-generates phases in continuous mode)
     # -----------------------------------------------------------------------
-    phase_start_time = time.time()
-    _wave_plan_printed_for_phase = -1
+    _continuous_iteration = 0
 
-    while not state.is_complete():
+    while True:
+      phase_start_time = time.time()
+      _wave_plan_printed_for_phase = -1
+
+      while not state.is_complete():
         phase = state.current_phase
 
         # Generate tasks for this phase if not done yet
@@ -496,49 +504,73 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
                             linear_issues=linear_issues)
         checkpoint.atomic_save(project_dir, state)
 
-    build_duration = time.time() - build_start_time
-    display.print_build_complete(
-        project_name=state.project_name or project_dir.name,
-        phases_done=len(state.phases),
-        tasks_done=state.tasks_completed,
-        duration_seconds=build_duration,
-    )
-    if tracker.session_total_cost() > 0:
-        print(tracker.format_session_summary())
-    logger.session_ended(
-        tasks_completed=state.tasks_completed,
-        total_cost=tracker.session_total_cost(),
-        duration_secs=build_duration,
-    )
+      # --- End of inner while (all phases complete) ---
 
-    from forge.health import compute_health_report, format_health_summary_line
-    report = compute_health_report(project_dir, logger.session_id)
-    print()
-    print(f"  {format_health_summary_line(report)}")
+      build_duration = time.time() - build_start_time
+      display.print_build_complete(
+          project_name=state.project_name or project_dir.name,
+          phases_done=len(state.phases),
+          tasks_done=state.tasks_completed,
+          duration_seconds=build_duration,
+      )
+      if tracker.session_total_cost() > 0:
+          print(tracker.format_session_summary())
+      logger.session_ended(
+          tasks_completed=state.tasks_completed,
+          total_cost=tracker.session_total_cost(),
+          duration_secs=build_duration,
+      )
 
-    # Save build record for history view
-    try:
-        from forge.history_view import save_build_record
-        _last_vercel = ""
-        _last_pr = ""
-        for p in reversed(state.phases):
-            if not _last_vercel and getattr(p, "vercel_deployment_url", ""):
-                _last_vercel = p.vercel_deployment_url
-            if not _last_pr and getattr(p, "github_pr", None):
-                _last_pr = str(p.github_pr)
-        save_build_record(
-            project_dir, state, report.grade,
-            tracker.session_total_cost(), int(build_duration),
-            vercel_url=_last_vercel, github_pr=_last_pr,
-        )
-    except Exception:
-        pass
+      from forge.health import compute_health_report, format_health_summary_line
+      report = compute_health_report(project_dir, logger.session_id)
+      print()
+      print(f"  {format_health_summary_line(report)}")
 
-    # Final dashboard update and stop
-    update_dashboard_state({
-        "health": report.grade,
-        "task_status": "complete",
-    })
+      # Save build record for history view
+      try:
+          from forge.history_view import save_build_record
+          _last_vercel = ""
+          _last_pr = ""
+          for p in reversed(state.phases):
+              if not _last_vercel and getattr(p, "vercel_deployment_url", ""):
+                  _last_vercel = p.vercel_deployment_url
+              if not _last_pr and getattr(p, "github_pr", None):
+                  _last_pr = str(p.github_pr)
+          save_build_record(
+              project_dir, state, report.grade,
+              tracker.session_total_cost(), int(build_duration),
+              vercel_url=_last_vercel, github_pr=_last_pr,
+          )
+      except Exception:
+          pass
+
+      # Dashboard update
+      update_dashboard_state({
+          "health": report.grade,
+          "task_status": "complete",
+      })
+
+      # --- Continuous mode: regenerate phases and keep going ---
+      if not continuous:
+          break
+
+      _continuous_iteration += 1
+      print(f"\n{'=' * 60}")
+      print(f"[forge] Continuous mode: starting iteration {_continuous_iteration + 1}...")
+      print(f"  Re-reading VISION.md + REQUIREMENTS.md for new phases...")
+      print(f"{'=' * 60}\n")
+
+      # Reset state for next iteration (preserves cost/log history)
+      state.phases = []
+      state.current_phase_index = 0
+      state.initialized = False
+
+      # Re-run initial setup (re-reads project docs, generates new phases)
+      _initial_setup(project_dir, state, dry_run=dry_run, mcp_config=mcp_config)
+      checkpoint.atomic_save(project_dir, state)
+      build_start_time = time.time()
+
+    # --- Exited outer loop (non-continuous or break) ---
     stop_dashboard()
 
 
@@ -604,10 +636,12 @@ def _initial_setup(project_dir: Path, state: ForgeState, dry_run: bool,
 
     # Initial commit
     if not dry_run:
-        git_utils.commit_and_push(
+        _hash, _pushed = git_utils.commit_and_push(
             project_dir,
             "[forge] Initial commit: ARCHITECTURE.md, VISION.md, REQUIREMENTS.md"
         )
+        if _hash and not _pushed:
+            print("  [forge] Warning: committed locally but push failed.")
 
 
 # ---------------------------------------------------------------------------
@@ -634,20 +668,29 @@ async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
         retry_count=task.retry_count,
     )
 
-    # Handle COMMIT_PENDING: skip Claude Code, just retry the commit
+    # Handle COMMIT_PENDING: skip Claude Code, just retry the push
     if task.status == TaskStatus.COMMIT_PENDING:
         print("  [forge] Retrying commit and push...")
         commit_msg = f"[forge] {task.title} ({task.id})"
         if locks:
             async with locks.git:
-                hash_ = git_utils.commit_and_push(project_dir, commit_msg)
+                hash_, pushed = git_utils.commit_and_push(project_dir, commit_msg)
         else:
-            hash_ = git_utils.commit_and_push(project_dir, commit_msg)
-        if hash_:
+            hash_, pushed = git_utils.commit_and_push(project_dir, commit_msg)
+        if hash_ and pushed:
             task.status = TaskStatus.DONE
             task.commit_hash = hash_
             task.completed_at = _now()
             print(f"  [forge] Committed and pushed: {hash_}")
+        elif hash_ and not pushed:
+            print("  [forge] Committed locally but push failed again. Logging to NEEDS_HUMAN.")
+            task.status = TaskStatus.COMMIT_PENDING
+            task.commit_hash = hash_
+            needs_human.append_note(
+                project_dir,
+                f"Task '{task.title}' ({task.id}) completed but push keeps failing. "
+                f"Manual `git push` may be needed."
+            )
         else:
             print("  [forge] Commit failed again. Logging to NEEDS_HUMAN.")
             task.status = TaskStatus.COMMIT_PENDING
@@ -915,22 +958,32 @@ async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
         commit_msg = f"[forge] {task.title} ({task.id})"
         if locks:
             async with locks.git:
-                hash_ = git_utils.commit_and_push(project_dir, commit_msg)
+                hash_, pushed = git_utils.commit_and_push(project_dir, commit_msg)
         else:
-            hash_ = git_utils.commit_and_push(project_dir, commit_msg)
-        if hash_:
+            hash_, pushed = git_utils.commit_and_push(project_dir, commit_msg)
+        if hash_ and pushed:
             task.commit_hash = hash_
             if logger:
                 logger.git_committed(hash_, commit_msg)
-        else:
-            # Commit failed - mark as commit pending
+        elif hash_ and not pushed:
+            # Committed locally but push failed - mark as commit pending
+            task.commit_hash = hash_
+            if logger:
+                logger.git_committed(hash_, commit_msg)
             if locks:
                 async with locks.state:
                     checkpoint.mark_task_commit_pending(project_dir, state, task)
             else:
                 checkpoint.mark_task_commit_pending(project_dir, state, task)
-            print("  [forge] Checkpoint saved: task done, commit pending.")
-            print("  Run `forge run` to retry the commit.")
+            print("  [forge] Committed locally but push failed. Will retry on next run.")
+        else:
+            # Commit itself failed - mark as commit pending
+            if locks:
+                async with locks.state:
+                    checkpoint.mark_task_commit_pending(project_dir, state, task)
+            else:
+                checkpoint.mark_task_commit_pending(project_dir, state, task)
+            print("  [forge] Commit failed. Will retry on next run.")
 
         # Update Linear issue status on task completion
         if lin_config and lin_config.enabled and lin_token and lin_config.update_issue_status:

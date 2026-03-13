@@ -103,12 +103,13 @@ def push(project_dir: Path) -> bool:
         return False
 
 
-def commit_and_push(project_dir: Path, message: str) -> Optional[str]:
-    """Convenience: commit then push. Returns commit hash."""
+def commit_and_push(project_dir: Path, message: str) -> Tuple[Optional[str], bool]:
+    """Convenience: commit then push. Returns (commit_hash, push_succeeded)."""
     hash_ = commit(project_dir, message)
     if hash_:
-        push(project_dir)
-    return hash_
+        pushed = push(project_dir)
+        return hash_, pushed
+    return None, False
 
 
 def get_head_hash(project_dir: Path) -> Optional[str]:

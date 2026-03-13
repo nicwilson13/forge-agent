@@ -11,6 +11,7 @@ This module imports only stdlib. No forge imports at module level.
 """
 
 import json
+import socket
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -291,11 +292,25 @@ class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 
+def _find_free_port(start: int = 3333, attempts: int = 20) -> int | None:
+    """Find an available port starting from *start*. Returns port or None."""
+    for offset in range(attempts):
+        port = start + offset
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", port))
+                return port
+        except OSError:
+            continue
+    return None
+
+
 def start_dashboard(project_dir: Path, port: int = 3333, run_mode: bool = False) -> threading.Thread | None:
     """
     Start the dashboard server in a background thread.
 
-    Returns the thread, or None if port is in use.
+    Automatically finds a free port starting from *port* if it is in use.
+    Returns the thread, or None if no free port is found.
     When run_mode=True (started by forge run), the dashboard never
     redirects to /setup since the build loop is already active.
     Never raises.
@@ -305,10 +320,15 @@ def start_dashboard(project_dir: Path, port: int = 3333, run_mode: bool = False)
     _run_mode = run_mode
     _stop_event.clear()
 
+    actual_port = _find_free_port(start=port)
+    if actual_port is None:
+        print(f"  [dashboard] Warning: no free port found ({port}-{port + 19}), dashboard disabled")
+        return None
+
     try:
-        server = _ThreadedHTTPServer(("127.0.0.1", port), DashboardHandler)
+        server = _ThreadedHTTPServer(("127.0.0.1", actual_port), DashboardHandler)
     except OSError:
-        print(f"  [dashboard] Warning: port {port} in use, dashboard disabled")
+        print(f"  [dashboard] Warning: port {actual_port} in use, dashboard disabled")
         return None
 
     _server = server
@@ -320,7 +340,7 @@ def start_dashboard(project_dir: Path, port: int = 3333, run_mode: bool = False)
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
-    print(f"  Dashboard: http://localhost:{port}")
+    print(f"  Dashboard: http://localhost:{actual_port}")
     return thread
 
 

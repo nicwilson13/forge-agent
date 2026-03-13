@@ -134,6 +134,18 @@ def _main_inner():
         action="store_true",
         help="Plan phases and tasks but do not execute them",
     )
+    run_p.add_argument(
+        "--dashboard-port",
+        type=int,
+        default=3333,
+        help="Starting port for the dashboard (auto-increments if in use, default: 3333)",
+    )
+    run_p.add_argument(
+        "--continuous",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep building after all phases complete (default: on, use --no-continuous to disable)",
+    )
 
     # forge rollback
     rollback_p = subparsers.add_parser(
@@ -226,7 +238,9 @@ def _main_inner():
     elif args.command == "run":
         from forge.commands.run import run_forge
         run_forge(project_dir, checkin_every=args.checkin_every,
-                  max_retries=args.max_retries, dry_run=args.dry_run)
+                  max_retries=args.max_retries, dry_run=args.dry_run,
+                  dashboard_port=args.dashboard_port,
+                  continuous=args.continuous)
 
     elif args.command == "rollback":
         from forge.commands.rollback import run_rollback
