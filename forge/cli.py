@@ -146,6 +146,12 @@ def _main_inner():
         default=True,
         help="Keep building after all phases complete (default: on, use --no-continuous to disable)",
     )
+    run_p.add_argument(
+        "--force-init",
+        action="store_true",
+        default=False,
+        help="Force re-initialization even if forge commits already exist (use when state is lost)",
+    )
 
     # forge rollback
     rollback_p = subparsers.add_parser(
@@ -240,7 +246,8 @@ def _main_inner():
         run_forge(project_dir, checkin_every=args.checkin_every,
                   max_retries=args.max_retries, dry_run=args.dry_run,
                   dashboard_port=args.dashboard_port,
-                  continuous=args.continuous)
+                  continuous=args.continuous,
+                  force_init=args.force_init)
 
     elif args.command == "rollback":
         from forge.commands.rollback import run_rollback

@@ -142,16 +142,19 @@ def _filter_fields(cls, data: dict) -> dict:
     return {k: v for k, v in data.items() if k in valid}
 
 
-def load_state(project_dir: Path) -> ForgeState:
-    path = _state_path(project_dir)
+def _backup_path(project_dir: Path) -> Path:
+    return project_dir / ".forge" / "state.json.bak"
+
+
+def _try_load_from_file(path: Path) -> Optional[ForgeState]:
+    """Try to load state from a specific file. Returns None on failure."""
     if not path.exists():
-        return ForgeState()
+        return None
     try:
         with open(path, encoding="utf-8") as f:
             raw = json.load(f)
-    except (json.JSONDecodeError, ValueError) as e:
-        print(f"  [state] WARNING: Corrupted state file, starting fresh: {e}")
-        return ForgeState()
+    except (json.JSONDecodeError, ValueError, OSError):
+        return None
 
     phases = []
     for p_raw in raw.get("phases", []):
@@ -165,17 +168,44 @@ def load_state(project_dir: Path) -> ForgeState:
     return state
 
 
+def load_state(project_dir: Path) -> ForgeState:
+    path = _state_path(project_dir)
+
+    # Try primary state file
+    state = _try_load_from_file(path)
+    if state is not None:
+        return state
+
+    # Try backup
+    backup = _backup_path(project_dir)
+    if backup.exists():
+        print("  [state] WARNING: state.json missing or corrupted, recovering from backup")
+        state = _try_load_from_file(backup)
+        if state is not None:
+            # Restore the backup as the primary
+            try:
+                import shutil
+                shutil.copy2(backup, path)
+            except OSError:
+                pass
+            return state
+        print("  [state] WARNING: Backup also corrupted")
+
+    return ForgeState()
+
+
 def save_state(project_dir: Path, state: ForgeState):
     state.last_updated = datetime.utcnow().isoformat()
     path = _state_path(project_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _serialise(obj):
-        if isinstance(obj, (Task, Phase, ForgeState)):
-            d = asdict(obj)
-            # Convert nested TaskStatus / PhaseStatus
-            return d
-        raise TypeError(f"Not serialisable: {type(obj)}")
+    # Back up current state.json before overwriting
+    if path.exists():
+        try:
+            import shutil
+            shutil.copy2(path, path.with_suffix(".json.bak"))
+        except OSError:
+            pass
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump(asdict(state), f, indent=2, default=str)

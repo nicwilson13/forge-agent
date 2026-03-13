@@ -11,6 +11,7 @@ Rename is atomic on all major OS platforms.
 
 import json
 import os
+import shutil
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -45,6 +46,12 @@ def atomic_save(project_dir: Path, state: ForgeState) -> None:
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(asdict(state), f, indent=2, default=str)
+        # Back up current state.json before overwriting
+        if target.exists():
+            try:
+                shutil.copy2(target, target.with_suffix(".json.bak"))
+            except OSError:
+                pass  # backup failure is non-fatal
         tmp.replace(target)
     finally:
         # Always clean up tmp if it still exists (rename failed)

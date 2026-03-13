@@ -195,7 +195,8 @@ class _TeeWriter:
 
 def run_forge(project_dir: Path, checkin_every: int = 10,
               max_retries: int = 3, dry_run: bool = False,
-              dashboard_port: int = 3333, continuous: bool = True):
+              dashboard_port: int = 3333, continuous: bool = True,
+              force_init: bool = False):
     """Synchronous public entry point - runs the async loop."""
     # Force line-buffered stdout so output appears immediately in piped
     # contexts (e.g. VS Code Claude Code extension).
@@ -212,8 +213,8 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
             log_path = project_dir / ".forge" / "run_output.log"
             tee = _TeeWriter(sys.stdout, log_path)
             sys.stdout = tee
-        else:
-            _install_crash_log(project_dir)
+        # Always install crash hook as safety net (works even without TeeWriter)
+        _install_crash_log(project_dir)
     except (AttributeError, OSError):
         pass
 
@@ -226,21 +227,31 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
         async def _main():
             await _run_forge_async(project_dir, checkin_every, max_retries, dry_run,
                                    dashboard_port=dashboard_port,
-                                   continuous=continuous)
+                                   continuous=continuous,
+                                   force_init=force_init)
 
         anyio.run(_main)
     except _BuildLoopExit as e:
         sys.exit(e.code)
     except Exception:
         # Log the crash to build.log and save checkpoint before dying
+        crash_tb = traceback.format_exc()
         try:
             logger = BuildLogger(project_dir)
-            logger.fatal_error("UNHANDLED_CRASH", traceback.format_exc())
+            logger.fatal_error("UNHANDLED_CRASH", crash_tb)
         except Exception:
             pass
         try:
             if _current_state is not None:
                 checkpoint.atomic_save(project_dir, _current_state)
+        except Exception:
+            pass
+        # Always write crash to run_output.log for post-mortem
+        try:
+            crash_log = project_dir / ".forge" / "run_output.log"
+            crash_log.parent.mkdir(parents=True, exist_ok=True)
+            with open(crash_log, "a", encoding="utf-8") as f:
+                f.write(f"\n--- CRASH ---\n{crash_tb}\n")
         except Exception:
             pass
         print(
@@ -257,7 +268,8 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
 async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
                            max_retries: int = 3, dry_run: bool = False,
                            dashboard_port: int = 3333,
-                           continuous: bool = True):
+                           continuous: bool = True,
+                           force_init: bool = False):
     """Async implementation of the build loop."""
     max_parallel = get_max_parallel()
 
@@ -313,6 +325,16 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
     # Phase 0: Initial setup
     # -----------------------------------------------------------------------
     if not state.initialized:
+        # Guard: refuse to re-scaffold a project that already has forge history
+        if not force_init and _detect_existing_forge_project(project_dir):
+            print(f"\n  {display.SYM_FAIL} State file missing but forge commits exist!")
+            print(f"  This project was previously built by Forge.")
+            print(f"  Refusing to re-scaffold an existing project.\n")
+            print(f"  To recover:")
+            print(f"    1. Check .forge/state.json.bak (auto-backup)")
+            print(f"    2. Run `forge run --force-init` to re-plan from scratch (keeps code)\n")
+            raise _BuildLoopExit(1)
+
         print("\n[forge] First run - setting up project...\n")
         try:
             _initial_setup(project_dir, state, dry_run, mcp_config=mcp_config)
@@ -608,6 +630,25 @@ def _get_integration_statuses(project_dir: Path) -> dict:
 # ---------------------------------------------------------------------------
 # Initial setup
 # ---------------------------------------------------------------------------
+
+def _detect_existing_forge_project(project_dir: Path) -> bool:
+    """Check if this project was previously built by Forge.
+
+    Looks for [forge] commits in git history and phase tags.
+    Returns True if existing forge work is detected.
+    """
+    try:
+        commits = git_utils.recent_commits(project_dir, n=20)
+        forge_commits = [c for c in commits if "[forge]" in c]
+        if forge_commits:
+            return True
+        tags = git_utils.list_forge_tags(project_dir)
+        if tags:
+            return True
+    except Exception:
+        pass
+    return False
+
 
 def _initial_setup(project_dir: Path, state: ForgeState, dry_run: bool,
                    mcp_config=None):
