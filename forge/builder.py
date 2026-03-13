@@ -54,6 +54,10 @@ def find_claude_cli() -> str | None:
         progfiles = os.environ.get("PROGRAMFILES", "")
         if progfiles:
             candidates.append(Path(progfiles) / "nodejs" / "claude.cmd")
+        # Claude Code installed via standalone installer or pip/pipx
+        home = Path.home()
+        candidates.append(home / ".local" / "bin" / "claude.exe")
+        candidates.append(home / ".local" / "bin" / "claude")
     else:
         home = Path.home()
         candidates.extend([

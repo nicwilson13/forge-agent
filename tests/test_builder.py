@@ -187,6 +187,25 @@ def test_find_claude_cli_windows_appdata_fallback(monkeypatch, tmp_path):
         assert result == str(claude_cmd)
 
 
+def test_find_claude_cli_windows_local_bin_fallback(monkeypatch, tmp_path):
+    """Falls back to ~/.local/bin/claude.exe on Windows."""
+    from forge.builder import find_claude_cli
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    # Create fake claude.exe in a fake home/.local/bin dir
+    local_bin = tmp_path / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    claude_exe = local_bin / "claude.exe"
+    claude_exe.write_text("fake")
+    monkeypatch.setenv("APPDATA", "/nonexistent")
+    monkeypatch.setenv("PROGRAMFILES", "/nonexistent")
+
+    with patch("shutil.which", return_value=None), \
+         patch("pathlib.Path.home", return_value=tmp_path):
+        result = find_claude_cli()
+        assert result == str(claude_exe)
+
+
 def test_find_claude_cli_not_found(monkeypatch):
     """Returns None when claude is not found anywhere."""
     from forge.builder import find_claude_cli
@@ -195,5 +214,6 @@ def test_find_claude_cli_not_found(monkeypatch):
     monkeypatch.setenv("APPDATA", "/nonexistent")
     monkeypatch.setenv("PROGRAMFILES", "/nonexistent")
 
-    with patch("shutil.which", return_value=None):
+    with patch("shutil.which", return_value=None), \
+         patch("pathlib.Path.home", return_value=Path("/nonexistent")):
         assert find_claude_cli() is None

@@ -16,6 +16,7 @@ python -m pytest tests/test_retry.py::test_is_fatal_auth_error -v  # run one tes
 forge doctor                        # pre-flight checks
 forge run --dry-run --project-dir .  # plan without executing
 forge run --checkin-every 5          # pause for human review every N tasks
+forge run --max-retries 5            # max retries before parking (default: 3)
 forge status --cost --health --log  # show build state, cost, health, logs
 forge rollback --list               # list rollback points
 forge new                           # guided project setup interview
@@ -24,6 +25,7 @@ forge checkin                       # interactively resolve NEEDS_HUMAN items
 forge reset-task <id>               # retry a parked task by ID
 forge linear-plan                   # generate Linear project plan from build plan
 forge dashboard                     # view last build in browser (read-only, localhost:3333)
+forge dashboard --port 4000         # use a custom port
 ```
 
 No linter or formatter is configured. `forge new` can generate `.github/workflows/ci.yml` for new projects.
@@ -152,3 +154,5 @@ Three modules provide post-build analytics — all are pure (no side effects exc
 ## Dependencies
 
 Python 3.10+. Runtime: `anthropic>=0.40.0`, `claude-code-sdk>=0.0.9`, `anyio>=4.0.0`, `pyyaml>=6.0`. Also uses `requests` (for connectivity checks). Entry point: `forge=forge.cli:main`.
+
+**cli.py** uses lazy imports — each subcommand imports its handler only when invoked, so `forge status` doesn't load `anthropic` or `claude_code_sdk`.
