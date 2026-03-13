@@ -17,10 +17,19 @@ import json
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from forge.cost_tracker import TokenUsage, MODEL_SONNET
+
+def _supports_unicode() -> bool:
+    encoding = getattr(sys.stdout, "encoding", "") or ""
+    return encoding.lower().replace("-", "") in ("utf8", "utf16", "utf32", "utf8sig")
+
+_SYM_OK = "\u2713" if _supports_unicode() else "[OK]"
+_SYM_FAIL = "\u2717" if _supports_unicode() else "[FAIL]"
+_SYM_WARN = "\u26a0" if _supports_unicode() else "[WARN]"
 
 
 # ---------------------------------------------------------------------------
@@ -526,21 +535,21 @@ def format_scan_results(
     parts: list[str] = []
 
     if confirmed:
-        parts.append(f"\u2717 Security scan: {len(confirmed)} critical finding(s)")
+        parts.append(f"{_SYM_FAIL} Security scan: {len(confirmed)} critical finding(s)")
         for f in confirmed:
             parts.append(f"    - {f.category} in {f.file_path}:{f.line_number}")
 
     if warnings:
-        parts.append(f"\u26a0 Security scan: {len(warnings)} warning(s) (not blocking)")
+        parts.append(f"{_SYM_WARN} Security scan: {len(warnings)} warning(s) (not blocking)")
         for f in warnings:
             parts.append(f"    - {f.category} in {f.file_path}:{f.line_number}")
 
     if audit_vulns:
-        parts.append(f"\u26a0 {len(audit_vulns)} dependency vulnerability(ies)")
+        parts.append(f"{_SYM_WARN} {len(audit_vulns)} dependency vulnerability(ies)")
         for v in audit_vulns:
             parts.append(f"    - {v}")
 
     if not confirmed and not warnings and not audit_vulns:
-        parts.append(f"\u2713 Security scan passed (0 findings, {files_scanned} files scanned)")
+        parts.append(f"{_SYM_OK} Security scan passed (0 findings, {files_scanned} files scanned)")
 
     return "\n".join(parts)

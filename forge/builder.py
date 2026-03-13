@@ -10,8 +10,9 @@ import subprocess
 import shutil
 import sys
 import time
+from collections.abc import AsyncIterable
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Tuple
 
 # SDK availability check - deferred to first use
 _SDK_AVAILABLE: bool | None = None
@@ -141,6 +142,15 @@ def _format_stream_line(message_type: str, content: str) -> str | None:
     return None
 
 
+async def _prompt_as_stream(prompt: str) -> AsyncIterable[dict[str, Any]]:
+    """Wrap a string prompt as an async generator for stdin-based transport.
+
+    Avoids Windows command-line length limits (~32K chars) by sending
+    the prompt via stdin instead of the --print CLI argument.
+    """
+    yield {"role": "user", "content": prompt}
+
+
 async def _run_task_async(project_dir: Path, prompt: str,
                          model: str | None = None) -> Tuple[bool, str, str, float]:
     """
@@ -184,10 +194,13 @@ async def _run_task_async(project_dir: Path, prompt: str,
     start_time = time.time()
 
     try:
+        # Use streaming mode to pass prompt via stdin instead of CLI args.
+        # This avoids Windows' ~32K command-line length limit.
+        stream = _prompt_as_stream(prompt)
         transport = SubprocessCLITransport(
-            prompt=prompt, options=options, cli_path=cli_path
+            prompt=stream, options=options, cli_path=cli_path
         ) if cli_path else None
-        async for message in query(prompt=prompt, options=options,
+        async for message in query(prompt=stream, options=options,
                                    transport=transport):
             if isinstance(message, AssistantMessage):
                 for block in message.content:

@@ -12,9 +12,19 @@ Imports only stdlib and forge.build_logger.read_log.
 """
 
 import json
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+
+def _supports_unicode() -> bool:
+    encoding = getattr(sys.stdout, "encoding", "") or ""
+    return encoding.lower().replace("-", "") in ("utf8", "utf16", "utf32", "utf8sig")
+
+_UNICODE = _supports_unicode()
+_HEAVY = "\u2550" if _UNICODE else "="
+_LIGHT = "\u2500" if _UNICODE else "-"
+_WARN = "\u26a0" if _UNICODE else "[WARN]"
 
 
 @dataclass
@@ -288,7 +298,7 @@ def format_health_report(report: HealthReport) -> str:
     lines = []
     lines.append("")
     lines.append("  Health Report")
-    lines.append("  " + "\u2550" * 56)
+    lines.append("  " + _HEAVY * 56)
     lines.append("")
     lines.append(f"  Build Health: {report.grade}")
 
@@ -296,7 +306,7 @@ def format_health_report(report: HealthReport) -> str:
     if s.tasks_attempted > 0:
         lines.append("")
         lines.append("  Session (current)")
-        lines.append("  " + "\u2500" * 56)
+        lines.append("  " + _LIGHT * 56)
         sr_pct = int(s.success_rate * 100)
         rr_pct = int(s.retry_rate * 100)
         lines.append(f"  Success rate:  {sr_pct:>3d}%  ({s.tasks_first_pass}/{s.tasks_attempted} tasks passed first attempt)")
@@ -311,7 +321,7 @@ def format_health_report(report: HealthReport) -> str:
     if p.session_count > 0:
         lines.append("")
         lines.append("  Project (all sessions)")
-        lines.append("  " + "\u2500" * 56)
+        lines.append("  " + _LIGHT * 56)
         lines.append(f"  Total cost:    {_format_cost(p.total_cost)}  across {p.session_count} session{'s' if p.session_count != 1 else ''}")
         lines.append(f"  Total time:    {_format_duration(p.total_build_secs)}  across {p.total_tasks} tasks")
         osr_pct = int(p.overall_success_rate * 100)
@@ -336,7 +346,7 @@ def format_health_report(report: HealthReport) -> str:
         if p.retry_hotspots:
             lines.append("  Retry hotspots:")
             for title, count in p.retry_hotspots:
-                lines.append(f"  \u26a0  \"{title}\"  failed {count}x")
+                lines.append(f"  {_WARN}  \"{title}\"  failed {count}x")
         else:
             lines.append("  Retry hotspots:  none")
 

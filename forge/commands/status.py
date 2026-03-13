@@ -84,7 +84,7 @@ def run_status(project_dir: Path, show_cost: bool = False,
             print("\n  No build log yet. Run `forge run` to generate events.")
         else:
             print(f"\n  Recent Build Events (last {log_tail})")
-            print("  " + "\u2500" * 58)
+            print("  " + "-" * 58)
             for r in records:
                 ts = r.get("ts", "")
                 # Extract HH:MM:SS from ISO timestamp

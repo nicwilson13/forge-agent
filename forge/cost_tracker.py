@@ -269,7 +269,7 @@ class CostTracker:
             return "  No cost data yet."
 
         lines = ["", "  Cost Report"]
-        divider = "  " + "\u2500" * 50
+        divider = "  " + "-" * 50
         lines.append(divider)
 
         # Group by phase

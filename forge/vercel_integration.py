@@ -13,11 +13,20 @@ This module imports only stdlib. No forge imports.
 """
 
 import json
+import sys
 import time
 import urllib.request
 import urllib.error
 from dataclasses import dataclass, asdict
 from pathlib import Path
+
+def _supports_unicode() -> bool:
+    encoding = getattr(sys.stdout, "encoding", "") or ""
+    return encoding.lower().replace("-", "") in ("utf8", "utf16", "utf32", "utf8sig")
+
+_SYM_OK = "\u2713" if _supports_unicode() else "[OK]"
+_SYM_FAIL = "\u2717" if _supports_unicode() else "[FAIL]"
+_SYM_WARN = "\u26a0" if _supports_unicode() else "[WARN]"
 
 
 @dataclass
@@ -301,16 +310,17 @@ def format_vercel_status(status: str, url_or_msg: str) -> str:
     disabled: "(Vercel integration not configured)"
     skipped:  "(Vercel check skipped)"
     """
+    _arrow = "\u2192" if _supports_unicode() else "->"
     if status == "ready":
         if url_or_msg:
-            return f"\u2713 Vercel: deployment ready \u2192 {url_or_msg}"
-        return "\u2713 Vercel: deployment ready"
+            return f"{_SYM_OK} Vercel: deployment ready {_arrow} {url_or_msg}"
+        return f"{_SYM_OK} Vercel: deployment ready"
     elif status == "error":
         if url_or_msg:
-            return f"\u2717 Vercel: deployment failed - {url_or_msg}"
-        return "\u2717 Vercel: deployment failed"
+            return f"{_SYM_FAIL} Vercel: deployment failed - {url_or_msg}"
+        return f"{_SYM_FAIL} Vercel: deployment failed"
     elif status == "timeout":
-        return "\u26a0 Vercel: deployment check timed out"
+        return f"{_SYM_WARN} Vercel: deployment check timed out"
     elif status == "disabled":
         return "(Vercel integration not configured)"
     else:
