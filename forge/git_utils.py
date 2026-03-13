@@ -23,6 +23,27 @@ def init_repo(project_dir: Path):
     print("  [git] Initialized repo")
 
 
+def is_working_directory_clean(project_dir: Path) -> bool:
+    """Return True if working directory has no uncommitted changes."""
+    code, out, _ = _run(["git", "status", "--porcelain"], project_dir)
+    return code == 0 and not out.strip()
+
+
+def clean_working_directory(project_dir: Path):
+    """Reset working directory to HEAD. Removes untracked files except .forge/ and .env."""
+    _run(["git", "checkout", "--", "."], project_dir)
+    _run(["git", "clean", "-fd", "-e", ".forge", "-e", ".env", "-e", "node_modules"], project_dir)
+
+
+def ensure_repo_ready(project_dir: Path):
+    """Ensure git repo is initialized, .gitignore set, and working directory is clean."""
+    if not is_git_repo(project_dir):
+        init_repo(project_dir)
+    ensure_gitignore(project_dir)
+    if not is_working_directory_clean(project_dir):
+        clean_working_directory(project_dir)
+
+
 def has_remote(project_dir: Path) -> bool:
     code, out, _ = _run(["git", "remote"], project_dir)
     return code == 0 and bool(out.strip())

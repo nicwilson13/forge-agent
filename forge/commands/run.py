@@ -583,9 +583,7 @@ def _initial_setup(project_dir: Path, state: ForgeState, dry_run: bool,
     ensure_memory_dir(project_dir)
 
     # Git setup
-    if not git_utils.is_git_repo(project_dir):
-        git_utils.init_repo(project_dir)
-    git_utils.ensure_gitignore(project_dir)
+    git_utils.ensure_repo_ready(project_dir)
 
     # Generate phases
     print("[forge] Generating development phases from VISION.md + REQUIREMENTS.md...")
@@ -685,6 +683,9 @@ async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
         state.tasks_completed += 1
         state.tasks_since_checkin += 1
         return
+
+    # Ensure clean working directory before task execution
+    git_utils.ensure_repo_ready(project_dir)
 
     # Build the prompt and determine model
     try:
