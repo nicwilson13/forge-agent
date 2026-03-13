@@ -114,17 +114,89 @@ def _handle_retry_exhausted(project_dir: Path, state: ForgeState,
     sys.exit(0)
 
 
+def _print_startup_diagnostics(project_dir: Path):
+    """Print pre-flight checks so the user sees proof-of-life immediately."""
+    import os
+
+    print(f"\n[forge] Starting in {project_dir}")
+
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if key:
+        masked = key[:12] + "..." + key[-4:] if len(key) > 16 else "***"
+        print(f"  API key : {masked}")
+    else:
+        print(f"  {display.SYM_WARN} WARNING: ANTHROPIC_API_KEY not set!")
+        print(f"  Set it in your environment or add a .env file in the project root.")
+
+    cli = builder.find_claude_cli()
+    if cli:
+        print(f"  Claude CLI: {cli}")
+    else:
+        print(f"  {display.SYM_WARN} WARNING: Claude CLI not found on PATH")
+        print(f"  Task execution requires the Claude Code CLI.")
+
+    # This exits with a helpful message if the SDK is missing
+    builder._check_sdk_available()
+    print()
+
+
+class _TeeWriter:
+    """Wraps sys.stdout to also write to a log file for post-mortem debugging."""
+
+    def __init__(self, original, log_path: Path):
+        self._original = original
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._log = open(log_path, "w", encoding="utf-8")
+
+    def write(self, data):
+        self._original.write(data)
+        try:
+            self._log.write(data)
+            self._log.flush()
+        except Exception:
+            pass
+
+    def flush(self):
+        self._original.flush()
+
+    def close_log(self):
+        try:
+            self._log.close()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+
 def run_forge(project_dir: Path, checkin_every: int = 10,
               max_retries: int = 3, dry_run: bool = False):
     """Synchronous public entry point - runs the async loop."""
-    _validate_project(project_dir)
+    # Force line-buffered stdout so output appears immediately in piped
+    # contexts (e.g. VS Code Claude Code extension).
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except (AttributeError, OSError):
+        pass  # non-standard stdout (e.g. test harness)
 
-    import anyio
+    # Tee all output to a log file for post-mortem debugging
+    log_path = project_dir / ".forge" / "run_output.log"
+    tee = _TeeWriter(sys.stdout, log_path)
+    sys.stdout = tee
 
-    async def _main():
-        await _run_forge_async(project_dir, checkin_every, max_retries, dry_run)
+    try:
+        _validate_project(project_dir)
+        _print_startup_diagnostics(project_dir)
 
-    anyio.run(_main)
+        import anyio
+
+        async def _main():
+            await _run_forge_async(project_dir, checkin_every, max_retries, dry_run)
+
+        anyio.run(_main)
+    finally:
+        sys.stdout = tee._original
+        tee.close_log()
 
 
 async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
@@ -190,6 +262,17 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
         except RetryExhaustedError as e:
             _handle_retry_exhausted(project_dir, state, None, e)
         checkpoint.atomic_save(project_dir, state)
+        # Push initial state to dashboard now that phases exist
+        update_dashboard_state({
+            "project_name": state.project_name or project_dir.name,
+            "current_phase": 1,
+            "total_phases": len(state.phases),
+            "phase_title": state.phases[0].title if state.phases else "",
+            "tasks_done": 0,
+            "total_tasks": 0,
+            "cost": "$0.00",
+            "integrations": _get_integration_statuses(project_dir),
+        })
         if dry_run:
             display.print_dry_run_plan(state.phases)
             return
@@ -242,6 +325,20 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
             checkpoint.atomic_save(project_dir, state)
             print(f"  Generated {len(tasks)} tasks")
             logger.phase_started(state.current_phase_index, phase.title, len(tasks))
+
+            # Push task-generation state to dashboard
+            total_tasks = sum(len(p.tasks) for p in state.phases)
+            tasks_done = sum(1 for p in state.phases for t in p.tasks if t.status == "done")
+            update_dashboard_state({
+                "project_name": state.project_name or project_dir.name,
+                "current_phase": state.current_phase_index + 1,
+                "total_phases": len(state.phases),
+                "phase_title": phase.title,
+                "tasks_done": tasks_done,
+                "total_tasks": total_tasks,
+                "cost": f"${tracker.session_total_cost():.2f}",
+                "integrations": _get_integration_statuses(project_dir),
+            })
 
             # Pre-park tasks flagged as NEEDS_HUMAN by the planner
             for task in tasks:

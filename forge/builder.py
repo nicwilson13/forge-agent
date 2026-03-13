@@ -192,7 +192,7 @@ async def _run_task_async(project_dir: Path, prompt: str,
                             for line in text.splitlines():
                                 formatted = _format_stream_line("text", line)
                                 if formatted:
-                                    print(formatted)
+                                    print(formatted, flush=True)
                             output_parts.append(text)
                     elif isinstance(block, ToolUseBlock):
                         tool_name = block.name
@@ -211,18 +211,18 @@ async def _run_task_async(project_dir: Path, prompt: str,
                         else:
                             formatted = _format_stream_line("tool", tool_name)
                         if formatted:
-                            print(formatted)
+                            print(formatted, flush=True)
                     elif isinstance(block, ToolResultBlock):
                         if block.is_error:
                             formatted = _format_stream_line("error", "tool result failed")
                             if formatted:
-                                print(formatted)
+                                print(formatted, flush=True)
 
             elif isinstance(message, ResultMessage):
                 elapsed = time.time() - start_time
                 cost_str = f"${message.total_cost_usd:.4f}" if message.total_cost_usd else "n/a"
                 print(f"  [builder] Finished in {elapsed:.0f}s | "
-                      f"turns: {message.num_turns} | cost: {cost_str}")
+                      f"turns: {message.num_turns} | cost: {cost_str}", flush=True)
 
                 if message.is_error:
                     error_text = message.result or "Unknown error"
@@ -236,7 +236,7 @@ async def _run_task_async(project_dir: Path, prompt: str,
                     error_data = message.data.get("message", str(message.data))
                     formatted = _format_stream_line("error", error_data)
                     if formatted:
-                        print(formatted)
+                        print(formatted, flush=True)
 
         elapsed = time.time() - start_time
         full_output = "\n".join(output_parts)

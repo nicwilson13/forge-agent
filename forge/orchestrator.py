@@ -99,6 +99,8 @@ def _chat(system: str, user: str, max_tokens: int = 4096,
 
     for attempt in range(MAX_RETRIES):
         try:
+            if attempt == 0:
+                print(f"  [orchestrator] Calling {model}...", flush=True)
             kwargs = dict(
                 model=model,
                 max_tokens=max_tokens,
@@ -124,6 +126,7 @@ def _chat(system: str, user: str, max_tokens: int = 4096,
             prefix, is_fatal, fix_instruction = _classify_anthropic_error(e)
             last_prefix = prefix
             last_error_str = str(e)
+            print(f"  [orchestrator] {prefix}: {str(e)[:120]}", flush=True)
 
             if is_fatal:
                 raise FatalAPIError(
