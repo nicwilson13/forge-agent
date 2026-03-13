@@ -195,12 +195,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def _serve_html(self):
-        # Redirect to setup wizard if no build state exists
+        # Redirect to setup wizard if no build state exists and no run in progress
         if _project_dir and not (_project_dir / ".forge" / "state.json").exists():
-            self.send_response(302)
-            self.send_header("Location", "/setup")
-            self.end_headers()
-            return
+            # If forge run was already started (log exists), serve the dashboard
+            # so the user sees the connecting/waiting state instead of a redirect loop
+            if not (_project_dir / ".forge" / "run_output.log").exists():
+                self.send_response(302)
+                self.send_header("Location", "/setup")
+                self.end_headers()
+                return
         content = INDEX_HTML.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")

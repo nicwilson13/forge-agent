@@ -11,6 +11,7 @@ This module imports only stdlib. No forge imports at module level.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -196,12 +197,19 @@ def start_forge_run_subprocess(project_dir: Path) -> None:
         log_path = project_dir / ".forge" / "run_output.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_file = open(log_path, "w", encoding="utf-8")  # noqa: SIM115
+        kwargs = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = (
+                subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.CREATE_NO_WINDOW
+            )
         subprocess.Popen(
             [sys.executable, "-m", "forge", "run",
              "--project-dir", str(project_dir)],
             stdout=log_file,
             stderr=log_file,
             cwd=str(project_dir),
+            **kwargs,
         )
     except Exception:
         # Create the log file anyway so the wait loop detects it
@@ -789,23 +797,8 @@ function buildPreview() {
   document.getElementById('preview-vision').textContent = vision;
 
   // Build requirements preview
-  const sections = [
-    ['Core Features', document.getElementById('req-features').value],
-    ['Pages and Routes', document.getElementById('req-pages').value],
-    ['Data Models', document.getElementById('req-data').value],
-    ['Non-Functional Requirements', document.getElementById('req-nonfunc').value]
-  ];
-  let reqPreview = '# REQUIREMENTS.md\\n\\n';
-  for (const [title, content] of sections) {
-    reqPreview += '## ' + title + '\\n\\n';
-    if (content && content.trim()) {
-      for (const line of content.trim().split('\\n')) {
-        if (line.trim()) reqPreview += '- [ ] ' + line.trim() + '\\n';
-      }
-    }
-    reqPreview += '\\n';
-  }
-  document.getElementById('preview-requirements').textContent = reqPreview;
+  const reqText = document.getElementById('req-text').value || '(No requirements provided)';
+  document.getElementById('preview-requirements').textContent = reqText;
 
   // Integration summary
   const enabled = Object.entries(integrations).filter(([,v]) => v).map(([k]) => k);
