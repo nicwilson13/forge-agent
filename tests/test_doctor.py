@@ -120,6 +120,23 @@ def test_check_requirements_md_few(tmp_path):
     assert result.status == CheckStatus.WARN
 
 
+def test_check_requirements_md_narrative_format(tmp_path):
+    """REQUIREMENTS.md with substantial content but no checkboxes should pass."""
+    content = "# Requirements\n\n" + "Feature description paragraph. " * 100
+    (tmp_path / "REQUIREMENTS.md").write_text(content)
+    result = _check_requirements_md(tmp_path)
+    assert result.status == CheckStatus.PASS
+    assert "narrative" in result.detail
+
+
+def test_check_requirements_md_empty_file(tmp_path):
+    """REQUIREMENTS.md that exists but is nearly empty should fail."""
+    (tmp_path / "REQUIREMENTS.md").write_text("# Requirements\n")
+    result = _check_requirements_md(tmp_path)
+    assert result.status == CheckStatus.FAIL
+    assert "empty or too brief" in result.detail
+
+
 def test_check_claude_md_tech_stack(tmp_path):
     """Returns PASS when CLAUDE.md has tech stack content."""
     content = "# CLAUDE.md\n\n## Tech Stack\n- Language: Python 3.11\n- Framework: FastAPI\n"

@@ -318,22 +318,31 @@ def _check_requirements_md(project_dir: Path) -> CheckResult:
                            "not found",
                            "Run `forge new` or manually write REQUIREMENTS.md")
     content = path.read_text(encoding="utf-8", errors="replace")
-    count = 0
+
+    # Count checkbox-style requirements
+    checkbox_count = 0
     for line in content.splitlines():
         stripped = line.strip()
         if stripped.startswith("- [ ]") or stripped.startswith("- [x]"):
-            count += 1
-    if count >= 10:
+            checkbox_count += 1
+
+    if checkbox_count >= 10:
         return CheckResult("REQUIREMENTS.md", CheckStatus.PASS,
-                           f"{count} requirements found")
-    if count >= 1:
+                           f"{checkbox_count} requirements found")
+    if checkbox_count >= 1:
         return CheckResult("REQUIREMENTS.md", CheckStatus.WARN,
-                           f"only {count} requirements - consider adding more",
+                           f"only {checkbox_count} requirements - consider adding more",
                            "Add more - [ ] items to REQUIREMENTS.md\n"
                            "     or run `forge new` to regenerate")
+
+    # No checkboxes — accept if file has substantial content (narrative format)
+    content_len = len(content.strip())
+    if content_len >= 500:
+        return CheckResult("REQUIREMENTS.md", CheckStatus.PASS,
+                           f"found ({content_len:,} chars, narrative format)")
     return CheckResult("REQUIREMENTS.md", CheckStatus.FAIL,
-                       "not found or empty",
-                       "Run `forge new` or manually write REQUIREMENTS.md")
+                       "file exists but appears empty or too brief",
+                       "Run `forge new` or add requirements to REQUIREMENTS.md")
 
 
 def _check_claude_md(project_dir: Path) -> CheckResult:
