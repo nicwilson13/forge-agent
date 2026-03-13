@@ -148,7 +148,7 @@ async def _prompt_as_stream(prompt: str) -> AsyncIterable[dict[str, Any]]:
     Avoids Windows command-line length limits (~32K chars) by sending
     the prompt via stdin instead of the --print CLI argument.
     """
-    yield {"role": "user", "content": prompt}
+    yield {"type": "user", "message": {"role": "user", "content": prompt}}
 
 
 async def _run_task_async(project_dir: Path, prompt: str,
