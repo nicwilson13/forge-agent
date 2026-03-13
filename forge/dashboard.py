@@ -30,6 +30,7 @@ _dashboard_state: dict = {}      # shared state updated by forge run
 _project_dir: Path | None = None
 _server: HTTPServer | None = None
 _stop_event = threading.Event()
+_run_mode: bool = False  # True when started by forge run (not forge dashboard)
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +197,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def _serve_html(self):
-        # Redirect to setup wizard if no build state exists and no run in progress
-        if _project_dir and not (_project_dir / ".forge" / "state.json").exists():
+        # Redirect to setup wizard if no build state exists and no run in progress.
+        # Skip redirect when in run mode (forge run already started the build loop).
+        if not _run_mode and _project_dir and not (_project_dir / ".forge" / "state.json").exists():
             # If forge run was already started (log exists), serve the dashboard
             # so the user sees the connecting/waiting state instead of a redirect loop
             if not (_project_dir / ".forge" / "run_output.log").exists():
@@ -289,15 +291,18 @@ class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 
-def start_dashboard(project_dir: Path, port: int = 3333) -> threading.Thread | None:
+def start_dashboard(project_dir: Path, port: int = 3333, run_mode: bool = False) -> threading.Thread | None:
     """
     Start the dashboard server in a background thread.
 
     Returns the thread, or None if port is in use.
+    When run_mode=True (started by forge run), the dashboard never
+    redirects to /setup since the build loop is already active.
     Never raises.
     """
-    global _project_dir, _server
+    global _project_dir, _server, _run_mode
     _project_dir = project_dir
+    _run_mode = run_mode
     _stop_event.clear()
 
     try:

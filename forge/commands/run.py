@@ -238,7 +238,7 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
 
     # Start web dashboard
     from forge.dashboard import start_dashboard, stop_dashboard, update_dashboard_state
-    dashboard_thread = start_dashboard(project_dir)
+    dashboard_thread = start_dashboard(project_dir, run_mode=True)
 
     if dry_run:
         print(f"  Mode: dry run")
