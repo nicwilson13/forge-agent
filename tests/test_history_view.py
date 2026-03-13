@@ -40,7 +40,7 @@ def test_save_build_record_creates_file(tmp_path):
     files = list(builds_dir.glob("*.json"))
     assert len(files) == 1
 
-    data = json.loads(files[0].read_text())
+    data = json.loads(files[0].read_text(encoding="utf-8"))
     assert data["health_grade"] == "A"
     assert data["total_cost"] == 1.24
     assert data["duration_seconds"] == 3420
@@ -55,7 +55,7 @@ def test_save_build_record_none_state(tmp_path):
     builds_dir = tmp_path / ".forge" / "builds"
     files = list(builds_dir.glob("*.json"))
     assert len(files) == 1
-    data = json.loads(files[0].read_text())
+    data = json.loads(files[0].read_text(encoding="utf-8"))
     assert data["health_grade"] == "B"
     assert data["phases_completed"] == 0
 

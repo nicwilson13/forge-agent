@@ -203,6 +203,7 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
     # Main loop
     # -----------------------------------------------------------------------
     phase_start_time = time.time()
+    _wave_plan_printed_for_phase = -1
 
     while not state.is_complete():
         phase = state.current_phase
@@ -284,14 +285,16 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
             if len(pending) > 1:
                 from forge.dependency_graph import compute_execution_waves, format_wave_plan
                 waves = compute_execution_waves(pending)
-                if len(waves) > 1:
-                    print(f"\n{format_wave_plan(waves)}")
-                    print(f"\n  Phase {state.current_phase_index + 1}: {phase.title}"
-                          f"  ({len(pending)} tasks, {max_parallel} parallel,"
-                          f" dependency-aware)\n")
-                else:
-                    print(f"\n  Phase {state.current_phase_index + 1}: {phase.title}"
-                          f"  ({len(pending)} tasks, {min(max_parallel, len(pending))} parallel)\n")
+                if _wave_plan_printed_for_phase != state.current_phase_index:
+                    if len(waves) > 1:
+                        print(f"\n{format_wave_plan(waves)}")
+                        print(f"\n  Phase {state.current_phase_index + 1}: {phase.title}"
+                              f"  ({len(pending)} tasks, {max_parallel} parallel,"
+                              f" dependency-aware)\n")
+                    else:
+                        print(f"\n  Phase {state.current_phase_index + 1}: {phase.title}"
+                              f"  ({len(pending)} tasks, {min(max_parallel, len(pending))} parallel)\n")
+                    _wave_plan_printed_for_phase = state.current_phase_index
                 completed = await _run_phase_parallel(
                     project_dir, state, phase, loop_guard,
                     max_retries, dry_run, tracker, logger, max_parallel,

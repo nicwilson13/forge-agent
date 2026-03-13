@@ -34,7 +34,7 @@ def test_log_writes_valid_json(tmp_path):
     logger.session_started("my-project", 3)
     logger.task_started(0, "t_01", "Build UI")
 
-    lines = (tmp_path / ".forge" / "build.log").read_text().strip().splitlines()
+    lines = (tmp_path / ".forge" / "build.log").read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 2
     for line in lines:
         data = json.loads(line)
@@ -46,7 +46,7 @@ def test_log_required_fields_present(tmp_path):
     logger = BuildLogger(tmp_path, session_id="abcd1234")
     logger.log("test_event", phase=1, task="t_01", extra="value")
 
-    lines = (tmp_path / ".forge" / "build.log").read_text().strip().splitlines()
+    lines = (tmp_path / ".forge" / "build.log").read_text(encoding="utf-8").strip().splitlines()
     data = json.loads(lines[0])
     assert "ts" in data
     assert data["event"] == "test_event"

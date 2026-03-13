@@ -118,6 +118,10 @@ class ParallelExecutor:
                 *[run_one(t) for t in wave_tasks],
                 return_exceptions=True
             )
+            # Re-raise process-terminating exceptions immediately
+            for gr in gather_results:
+                if isinstance(gr, (SystemExit, KeyboardInterrupt)):
+                    raise gr
             # Check for exceptions that bypassed wave_results
             for i, gr in enumerate(gather_results):
                 if isinstance(gr, BaseException):

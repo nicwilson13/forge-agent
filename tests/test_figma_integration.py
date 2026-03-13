@@ -137,7 +137,7 @@ def test_generate_token_file_with_colors(tmp_path):
     result = generate_token_file(variables, tmp_path)
     assert result is not None
     assert result.exists()
-    content = result.read_text()
+    content = result.read_text(encoding="utf-8")
     assert "primary" in content
     assert "#6366f1" in content
     assert "as const" in content

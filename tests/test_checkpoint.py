@@ -56,7 +56,7 @@ def test_atomic_save_existing_preserved_on_failure(tmp_path):
     # so instead verify the happy path preserves content correctly
     state = ForgeState(project_name="updated")
     atomic_save(tmp_path, state)
-    data = json.loads((forge_dir / "state.json").read_text())
+    data = json.loads((forge_dir / "state.json").read_text(encoding="utf-8"))
     assert data["project_name"] == "updated"
 
 

@@ -31,22 +31,22 @@ def test_ensure_memory_dir_creates_header_files(tmp_path):
     files = sorted(f.name for f in memory_dir.glob("*.md"))
     assert files == ["decisions.md", "failures.md", "patterns.md"]
 
-    decisions = (memory_dir / "decisions.md").read_text()
+    decisions = (memory_dir / "decisions.md").read_text(encoding="utf-8")
     assert "# Architectural Decisions" in decisions
 
-    patterns = (memory_dir / "patterns.md").read_text()
+    patterns = (memory_dir / "patterns.md").read_text(encoding="utf-8")
     assert "# Code Patterns" in patterns
 
-    failures = (memory_dir / "failures.md").read_text()
+    failures = (memory_dir / "failures.md").read_text(encoding="utf-8")
     assert "# Failed Approaches" in failures
 
 
 def test_ensure_memory_dir_idempotent(tmp_path):
     """Running ensure_memory_dir twice does not duplicate headers."""
     ensure_memory_dir(tmp_path)
-    content_before = (tmp_path / ".forge" / "memory" / "decisions.md").read_text()
+    content_before = (tmp_path / ".forge" / "memory" / "decisions.md").read_text(encoding="utf-8")
     ensure_memory_dir(tmp_path)
-    content_after = (tmp_path / ".forge" / "memory" / "decisions.md").read_text()
+    content_after = (tmp_path / ".forge" / "memory" / "decisions.md").read_text(encoding="utf-8")
     assert content_before == content_after
 
 
@@ -59,7 +59,7 @@ def test_record_decision_creates_entry(tmp_path):
     ensure_memory_dir(tmp_path)
     record_decision(tmp_path, "Auth approach", "Use Supabase Auth",
                     "Simpler than custom auth")
-    content = (tmp_path / ".forge" / "memory" / "decisions.md").read_text()
+    content = (tmp_path / ".forge" / "memory" / "decisions.md").read_text(encoding="utf-8")
     assert "## Auth approach" in content
     assert "Use Supabase Auth" in content
 
@@ -70,7 +70,7 @@ def test_record_decision_includes_all_fields(tmp_path):
     record_decision(tmp_path, "State mgmt", "Use Zustand",
                     "Avoids Redux complexity",
                     phase_title="Phase 3", task_title="Build dashboard")
-    content = (tmp_path / ".forge" / "memory" / "decisions.md").read_text()
+    content = (tmp_path / ".forge" / "memory" / "decisions.md").read_text(encoding="utf-8")
     assert "## State mgmt" in content
     assert "**Decision:** Use Zustand" in content
     assert "**Rationale:** Avoids Redux complexity" in content
@@ -88,7 +88,7 @@ def test_record_pattern_creates_entry(tmp_path):
     ensure_memory_dir(tmp_path)
     record_pattern(tmp_path, "API route structure",
                    "All API routes follow /app/api/[resource]/route.ts")
-    content = (tmp_path / ".forge" / "memory" / "patterns.md").read_text()
+    content = (tmp_path / ".forge" / "memory" / "patterns.md").read_text(encoding="utf-8")
     assert "## API route structure" in content
     assert "/app/api/[resource]/route.ts" in content
 
@@ -98,7 +98,7 @@ def test_record_pattern_deduplicates(tmp_path):
     ensure_memory_dir(tmp_path)
     record_pattern(tmp_path, "API route structure", "Description 1")
     record_pattern(tmp_path, "API route structure", "Description 2")
-    content = (tmp_path / ".forge" / "memory" / "patterns.md").read_text()
+    content = (tmp_path / ".forge" / "memory" / "patterns.md").read_text(encoding="utf-8")
     assert content.count("## API route structure") == 1
 
 
@@ -114,7 +114,7 @@ def test_record_failure_creates_entry(tmp_path):
                    "Exposed service role key",
                    "Use API routes instead",
                    phase_title="Phase 2")
-    content = (tmp_path / ".forge" / "memory" / "failures.md").read_text()
+    content = (tmp_path / ".forge" / "memory" / "failures.md").read_text(encoding="utf-8")
     assert "Direct DB calls from client" in content
     assert "Exposed service role key" in content
     assert "Use API routes instead" in content

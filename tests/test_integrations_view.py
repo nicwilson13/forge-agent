@@ -81,7 +81,7 @@ def test_save_integration_config_writes_json(tmp_path):
         result = save_integration_config(tmp_path, "github", config_data)
 
     assert result is True
-    written = json.loads((tmp_path / ".forge" / "github.json").read_text())
+    written = json.loads((tmp_path / ".forge" / "github.json").read_text(encoding="utf-8"))
     assert written["owner"] == "myorg"
     assert written["enabled"] is True
 

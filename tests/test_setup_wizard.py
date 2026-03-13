@@ -142,7 +142,7 @@ def test_handle_setup_submit_writes_vision(tmp_path, monkeypatch):
 
     vision_file = tmp_path / "VISION.md"
     assert vision_file.exists()
-    assert "Test Vision" in vision_file.read_text()
+    assert "Test Vision" in vision_file.read_text(encoding="utf-8")
 
 
 def test_handle_setup_submit_writes_requirements(tmp_path, monkeypatch):
@@ -169,7 +169,7 @@ def test_handle_setup_submit_writes_requirements(tmp_path, monkeypatch):
 
     req_file = tmp_path / "REQUIREMENTS.md"
     assert req_file.exists()
-    content = req_file.read_text()
+    content = req_file.read_text(encoding="utf-8")
     assert "- [ ] Login" in content
     assert "- [ ] Signup" in content
     assert "- [ ] Fast" in content
@@ -204,7 +204,7 @@ def test_handle_setup_submit_writes_integration_config(tmp_path, monkeypatch):
 
     github_config = tmp_path / ".forge" / "github.json"
     assert github_config.exists()
-    data = json.loads(github_config.read_text())
+    data = json.loads(github_config.read_text(encoding="utf-8"))
     assert data["enabled"] is True
     assert data["owner"] == "myorg"
     assert data["repo"] == "myrepo"

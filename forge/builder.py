@@ -70,6 +70,26 @@ def find_claude_cli() -> str | None:
     return None
 
 
+def _resolve_cli_for_transport(cli_path: str | None) -> str | None:
+    """Resolve CLI path for SubprocessCLITransport compatibility.
+
+    On Windows, .cmd wrappers may not be directly executable by
+    anyio.open_process. If we find a .cmd, look for the real
+    executable (claude.exe) alongside it.
+    """
+    if cli_path is None or sys.platform != "win32":
+        return cli_path
+    if not cli_path.lower().endswith(".cmd"):
+        return cli_path
+    import os
+    cli_dir = os.path.dirname(cli_path)
+    for name in ["claude.exe", "claude"]:
+        candidate = os.path.join(cli_dir, name)
+        if os.path.isfile(candidate) and candidate.lower() != cli_path.lower():
+            return candidate
+    return cli_path  # fallback to original
+
+
 def _check_sdk_available() -> None:
     """Verify the Claude Code SDK is importable. Exit with a helpful message if not."""
     global _SDK_AVAILABLE
@@ -149,7 +169,7 @@ async def _run_task_async(project_dir: Path, prompt: str,
     )
 
     # Resolve CLI path once so parallel tasks don't race on shutil.which
-    cli_path = find_claude_cli()
+    cli_path = _resolve_cli_for_transport(find_claude_cli())
 
     output_parts: list[str] = []
     start_time = time.time()
@@ -219,10 +239,17 @@ async def _run_task_async(project_dir: Path, prompt: str,
         return True, full_output, "", elapsed
 
     except CLINotFoundError as e:
-        print(f"  [debug] CLINotFoundError: {e}, cli_path={cli_path}")
+        cause = e.__cause__ or e.__context__
+        print(f"  [debug] CLINotFoundError: {e}")
+        print(f"  [debug]   cli_path={cli_path}")
+        if cause:
+            print(f"  [debug]   cause={type(cause).__name__}: {cause}")
+        else:
+            print(f"  [debug]   no cause chain")
+        print(f"  [debug]   cwd={project_dir} exists={project_dir.exists()}")
         return False, "", (
-            "AUTH_ERROR: Claude Code CLI not found. "
-            "Install it: https://docs.anthropic.com/en/docs/claude-code"
+            "PROCESS_ERROR: Claude Code CLI not found or failed to start. "
+            "Install/verify: https://docs.anthropic.com/en/docs/claude-code"
         ), time.time() - start_time
     except CLIConnectionError as e:
         return False, "", f"CONNECTION_ERROR: {e}", time.time() - start_time

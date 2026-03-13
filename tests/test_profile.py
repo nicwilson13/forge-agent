@@ -47,7 +47,7 @@ def test_load_profile_missing_returns_empty(tmp_path):
 def test_load_profile_returns_dict(tmp_path):
     """Returns populated dict when profile file exists."""
     profile_file = tmp_path / "profile.yaml"
-    yaml.safe_dump({"framework": "Next.js", "language": "TypeScript"}, open(profile_file, "w"))
+    yaml.safe_dump({"framework": "Next.js", "language": "TypeScript"}, open(profile_file, "w", encoding="utf-8"))
 
     with _patch_profile_path(tmp_path):
         result = load_profile()
@@ -61,7 +61,7 @@ def test_save_profile_creates_directory(tmp_path):
     with patch("forge.profile.profile_path", return_value=profile_file):
         path = save_profile({"framework": "Remix"})
     assert path.exists()
-    data = yaml.safe_load(open(path))
+    data = yaml.safe_load(open(path, encoding="utf-8"))
     assert data["framework"] == "Remix"
 
 
@@ -70,7 +70,7 @@ def test_save_profile_writes_yaml(tmp_path):
     profile_file = tmp_path / "profile.yaml"
     with patch("forge.profile.profile_path", return_value=profile_file):
         save_profile({"framework": "Next.js", "language": "TypeScript"})
-    data = yaml.safe_load(open(profile_file))
+    data = yaml.safe_load(open(profile_file, encoding="utf-8"))
     assert data["framework"] == "Next.js"
     assert "updated_at" in data
     assert "created_at" in data
@@ -85,7 +85,7 @@ def test_has_profile_false_when_missing(tmp_path):
 def test_has_profile_true_when_present(tmp_path):
     """Returns True when profile file exists with content."""
     profile_file = tmp_path / "profile.yaml"
-    yaml.safe_dump({"framework": "Next.js"}, open(profile_file, "w"))
+    yaml.safe_dump({"framework": "Next.js"}, open(profile_file, "w", encoding="utf-8"))
     with _patch_profile_path(tmp_path):
         assert has_profile() is True
 
