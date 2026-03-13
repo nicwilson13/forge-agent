@@ -14,6 +14,7 @@ import json
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from pathlib import Path
 
 from forge.nav_shell import page_shell
@@ -282,6 +283,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
 # Server lifecycle
 # ---------------------------------------------------------------------------
 
+
+class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    """Handle each request in a new thread so SSE doesn't block other routes."""
+    daemon_threads = True
+
+
 def start_dashboard(project_dir: Path, port: int = 3333) -> threading.Thread | None:
     """
     Start the dashboard server in a background thread.
@@ -294,7 +301,7 @@ def start_dashboard(project_dir: Path, port: int = 3333) -> threading.Thread | N
     _stop_event.clear()
 
     try:
-        server = HTTPServer(("127.0.0.1", port), DashboardHandler)
+        server = _ThreadedHTTPServer(("127.0.0.1", port), DashboardHandler)
     except OSError:
         print(f"  [dashboard] Warning: port {port} in use, dashboard disabled")
         return None
