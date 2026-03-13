@@ -3,11 +3,13 @@ forge run - The autonomous build loop.
 """
 
 import asyncio
+import os
 import signal
 import sys
 import time
 import traceback
 from pathlib import Path
+from typing import IO, Optional
 
 from forge import orchestrator, builder, git_utils, needs_human, display, checkpoint
 from forge.parallel import get_max_parallel, ParallelExecutor, ParallelLocks, TaskResult
@@ -139,8 +141,10 @@ def _print_startup_diagnostics(project_dir: Path):
     if cli:
         print(f"  Claude CLI: {cli}")
     else:
-        print(f"  {display.SYM_WARN} WARNING: Claude CLI not found on PATH")
+        print(f"  {display.SYM_FAIL} FATAL: Claude CLI not found on PATH")
         print(f"  Task execution requires the Claude Code CLI.")
+        print(f"  Install: https://docs.anthropic.com/en/docs/claude-code")
+        sys.exit(1)
 
     # This exits with a helpful message if the SDK is missing
     builder._check_sdk_available()
@@ -193,6 +197,46 @@ class _TeeWriter:
         return getattr(self._original, name)
 
 
+LOCK_FILE = ".forge/forge.lock"
+
+
+def _acquire_session_lock(project_dir: Path) -> Optional[IO]:
+    """Acquire an exclusive file lock to prevent concurrent forge runs."""
+    lock_path = project_dir / LOCK_FILE
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        f = open(lock_path, "w")
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        f.write(str(os.getpid()))
+        f.flush()
+        return f
+    except (OSError, IOError):
+        try:
+            f.close()
+        except Exception:
+            pass
+        return None
+
+
+def _release_session_lock(lock_file: Optional[IO], project_dir: Path):
+    """Release the session lock and remove the lock file."""
+    if lock_file is None:
+        return
+    try:
+        lock_file.close()
+    except Exception:
+        pass
+    try:
+        (project_dir / LOCK_FILE).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def run_forge(project_dir: Path, checkin_every: int = 10,
               max_retries: int = 3, dry_run: bool = False,
               dashboard_port: int = 3333, continuous: bool = True,
@@ -218,8 +262,16 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
     except (AttributeError, OSError):
         pass
 
+    lock_file = None
     try:
         _validate_project(project_dir)
+
+        lock_file = _acquire_session_lock(project_dir)
+        if lock_file is None:
+            print(f"  {display.SYM_FAIL} Another forge process is already running in this project.")
+            print(f"  If this is incorrect, delete {project_dir / LOCK_FILE}")
+            sys.exit(1)
+
         _print_startup_diagnostics(project_dir)
 
         import anyio
@@ -260,6 +312,7 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
         )
         raise
     finally:
+        _release_session_lock(lock_file, project_dir)
         if tee is not None:
             sys.stdout = tee._original
             tee.close_log()
@@ -505,6 +558,26 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
                             ),
                             logger,
                         )
+
+                    # Circuit breaker: if all tasks failed with the same error
+                    # pattern, stop the build instead of retrying endlessly
+                    failed = [
+                        t for t in phase.tasks
+                        if t.status in (TaskStatus.FAILED, TaskStatus.PARKED)
+                        and t.notes
+                    ]
+                    if failed:
+                        prefixes = set()
+                        for t in failed:
+                            p = extract_error_prefix(t.notes)
+                            if p != "UNKNOWN":
+                                prefixes.add(p)
+                        if len(prefixes) == 1:
+                            prefix = prefixes.pop()
+                            print(f"\n  {display.SYM_FAIL} All {len(failed)} tasks failed "
+                                  f"with {prefix}. Stopping build.")
+                            print(f"  Fix the underlying issue and re-run forge.")
+                            raise _BuildLoopExit(1)
                 continue
 
         # Check-in gate
@@ -792,6 +865,9 @@ async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
             _clear_interrupt_handler()
         return
 
+    # Record baseline commit for per-task diff scoping in parallel mode
+    baseline_commit = git_utils.get_head_hash(project_dir)
+
     # Call Claude Code
     try:
         builder._check_sdk_available()
@@ -813,9 +889,11 @@ async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
     if not locks:
         _clear_interrupt_handler()
 
-    # Check for fatal errors in builder stderr
+    # Check for fatal/environment errors in builder stderr
     if not success:
         prefix = extract_error_prefix(stderr)
+        # Store error prefix in task notes for circuit breaker detection
+        task.notes = (task.notes or "") + f"\n[{prefix}] {stderr[:200]}"
 
         # Prompt too long: retry once with a reduced context budget
         if prefix == "PROMPT_TOO_LONG":
@@ -849,31 +927,34 @@ async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
             return
 
     # Semantic diff review (after build, before tests/commit)
-    from forge.diff_review import run_diff_review, format_review_output
-    review_verdict, review_issues, review_usage = run_diff_review(
-        project_dir, task.title, task.description
-    )
-    review_line = format_review_output(review_verdict, review_issues)
-    if review_verdict == "flagged":
-        print(f"  {display.SYM_WARN} {review_line}")
-        if logger:
-            logger.log("diff_review_flagged", phase=state.current_phase_index,
-                       task=task.id, issues=review_issues[:3])
-        if review_issues:
-            task.notes = (task.notes or "") + \
-                f"\nDiff review flags: {'; '.join(review_issues)}"
-    elif review_verdict == "approved":
-        print(f"  {display.SYM_OK} {review_line}")
-        if logger:
-            logger.log("diff_review_approved", phase=state.current_phase_index,
-                       task=task.id)
-    elif review_verdict == "skipped":
-        reason = review_issues[0] if review_issues else "unknown"
-        if reason not in ("no changes", "change too small"):
-            print(f"  ({review_line})")
-        if logger:
-            logger.log("diff_review_skipped", phase=state.current_phase_index,
-                       task=task.id, reason=reason)
+    # Skip when builder failed -- no meaningful changes to review
+    if success:
+        from forge.diff_review import run_diff_review, format_review_output
+        review_verdict, review_issues, review_usage = run_diff_review(
+            project_dir, task.title, task.description,
+            baseline_commit=baseline_commit,
+        )
+        review_line = format_review_output(review_verdict, review_issues)
+        if review_verdict == "flagged":
+            print(f"  {display.SYM_WARN} {review_line}")
+            if logger:
+                logger.log("diff_review_flagged", phase=state.current_phase_index,
+                           task=task.id, issues=review_issues[:3])
+            if review_issues:
+                task.notes = (task.notes or "") + \
+                    f"\nDiff review flags: {'; '.join(review_issues)}"
+        elif review_verdict == "approved":
+            print(f"  {display.SYM_OK} {review_line}")
+            if logger:
+                logger.log("diff_review_approved", phase=state.current_phase_index,
+                           task=task.id)
+        elif review_verdict == "skipped":
+            reason = review_issues[0] if review_issues else "unknown"
+            if reason not in ("no changes", "change too small"):
+                print(f"  ({review_line})")
+            if logger:
+                logger.log("diff_review_skipped", phase=state.current_phase_index,
+                           task=task.id, reason=reason)
 
     # Run tests
     tests_passed, test_out, test_err = builder.run_tests(project_dir)

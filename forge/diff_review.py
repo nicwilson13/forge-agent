@@ -74,15 +74,19 @@ If in doubt, approve.
 # Diff helpers
 # ---------------------------------------------------------------------------
 
-def get_working_diff(project_dir: Path) -> str:
+def get_working_diff(project_dir: Path, baseline: str = "") -> str:
     """
-    Get the git diff of all uncommitted changes.
+    Get the git diff of uncommitted changes.
 
-    Runs: git diff HEAD
+    If baseline is provided, diffs from that commit (isolates per-task changes
+    in parallel mode). Otherwise diffs from HEAD.
     Returns the diff string, or empty string if no changes or error.
     Never raises.
     """
     try:
+        if baseline:
+            from forge.git_utils import get_diff_from
+            return get_diff_from(project_dir, baseline)
         return get_diff(project_dir, staged_only=False)
     except Exception:
         return ""
@@ -295,15 +299,19 @@ def run_diff_review(
     project_dir: Path,
     task_title: str,
     task_description: str,
+    baseline_commit: str = "",
 ) -> tuple[str, list[str], TokenUsage]:
     """
     Full diff review pipeline.
+
+    baseline_commit: if provided, only review changes since that commit
+    (isolates per-task diffs in parallel mode).
 
     Returns ("skipped", [reason], empty_usage) when skipped.
     Never raises.
     """
     try:
-        diff = get_working_diff(project_dir)
+        diff = get_working_diff(project_dir, baseline=baseline_commit)
 
         should_review, reason = should_review_diff(diff)
         if not should_review:

@@ -26,7 +26,7 @@ MAX_OFFLINE_ATTEMPTS = 10
 
 # Known error prefixes from builder.py
 _RETRYABLE_PREFIXES = {"RATE_LIMIT", "CONNECTION_ERROR", "TIMEOUT"}
-_FATAL_PREFIXES = {"AUTH_ERROR", "PROMPT_TOO_LONG"}
+_FATAL_PREFIXES = {"AUTH_ERROR", "PROMPT_TOO_LONG", "ENV_ERROR"}
 _KNOWN_PREFIXES = _RETRYABLE_PREFIXES | _FATAL_PREFIXES | {"PROCESS_ERROR", "SDK_ERROR"}
 
 # Local Unicode support detection (no forge.display dependency)
@@ -63,7 +63,7 @@ def is_retryable_error(error_prefix: str) -> bool:
     Return True if the error type should be retried with backoff.
 
     Retryable: RATE_LIMIT, CONNECTION_ERROR, TIMEOUT
-    Fatal (not retryable): AUTH_ERROR, PROCESS_ERROR
+    Fatal (not retryable): AUTH_ERROR, PROMPT_TOO_LONG, ENV_ERROR, PROCESS_ERROR
     Unknown prefixes: treat as retryable (conservative)
     """
     if error_prefix in _RETRYABLE_PREFIXES:
@@ -78,7 +78,9 @@ def is_fatal_error(error_prefix: str) -> bool:
     """
     Return True if the error requires immediate stop (no retry).
 
-    Currently only AUTH_ERROR is fatal - the user must fix their key.
+    AUTH_ERROR: user must fix their API key.
+    PROMPT_TOO_LONG: prompt exceeds context window.
+    ENV_ERROR: environment misconfiguration (e.g. CLI not found).
     PROCESS_ERROR is not fatal - it may be a transient Claude Code issue.
     """
     return error_prefix in _FATAL_PREFIXES

@@ -182,8 +182,7 @@ async def _run_task_async(project_dir: Path, prompt: str,
         model=model,
         system_prompt=(
             "You are working in a project managed by Forge. "
-            "Read and follow the CLAUDE.md file in the project root for all conventions and constraints. "
-            "Run /init at the start to load project context."
+            "Read and follow the CLAUDE.md file in the project root for all conventions and constraints."
         ),
     )
 
@@ -270,7 +269,7 @@ async def _run_task_async(project_dir: Path, prompt: str,
             print(f"  [debug]   no cause chain")
         print(f"  [debug]   cwd={project_dir} exists={project_dir.exists()}")
         return False, "", (
-            "PROCESS_ERROR: Claude Code CLI not found or failed to start. "
+            "ENV_ERROR: Claude Code CLI not found or failed to start. "
             "Install/verify: https://docs.anthropic.com/en/docs/claude-code"
         ), time.time() - start_time
     except CLIConnectionError as e:

@@ -47,6 +47,18 @@ def test_is_not_fatal_process_error():
     assert is_retryable_error("PROCESS_ERROR") is False
 
 
+def test_is_fatal_env_error():
+    """ENV_ERROR is fatal (environment misconfiguration like CLI not found)."""
+    assert is_fatal_error("ENV_ERROR") is True
+    assert is_retryable_error("ENV_ERROR") is False
+
+
+def test_is_fatal_prompt_too_long():
+    """PROMPT_TOO_LONG is fatal."""
+    assert is_fatal_error("PROMPT_TOO_LONG") is True
+    assert is_retryable_error("PROMPT_TOO_LONG") is False
+
+
 # ---------------------------------------------------------------------------
 # Error prefix extraction
 # ---------------------------------------------------------------------------
@@ -57,6 +69,7 @@ def test_extract_error_prefix_known():
     assert extract_error_prefix("AUTH_ERROR: invalid key") == "AUTH_ERROR"
     assert extract_error_prefix("CONNECTION_ERROR: network down") == "CONNECTION_ERROR"
     assert extract_error_prefix("TIMEOUT: timed out after 600s") == "TIMEOUT"
+    assert extract_error_prefix("ENV_ERROR: Claude Code CLI not found") == "ENV_ERROR"
 
 
 def test_extract_error_prefix_unknown():

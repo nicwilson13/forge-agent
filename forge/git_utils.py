@@ -186,6 +186,23 @@ def recent_commits(project_dir: Path, n: int = 5) -> list:
     return []
 
 
+def get_head_hash(project_dir: Path) -> str:
+    """Return the current HEAD commit hash, or empty string on error."""
+    code, out, _ = _run(["git", "rev-parse", "HEAD"], project_dir)
+    return out.strip() if code == 0 else ""
+
+
+def get_diff_from(project_dir: Path, baseline: str) -> str:
+    """Return git diff from a specific commit to the working tree.
+
+    If baseline is empty, falls back to git diff HEAD.
+    """
+    if not baseline:
+        return get_diff(project_dir, staged_only=False)
+    code, out, _ = _run(["git", "diff", baseline], project_dir)
+    return out if code == 0 else ""
+
+
 def get_diff(project_dir: Path, staged_only: bool = False) -> str:
     """
     Return the current git diff as a string.
