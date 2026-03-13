@@ -19,7 +19,30 @@ import sys
 from pathlib import Path
 
 
+def _load_dotenv():
+    """Load .env file from cwd if present. Never raises."""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        # python-dotenv not installed — fall back to manual parse
+        env_path = Path(".env")
+        if env_path.is_file():
+            import os
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip("'\"")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+
+
 def main():
+    _load_dotenv()
+
     parser = argparse.ArgumentParser(
         description="Forge - Autonomous AI Development Agent",
         formatter_class=argparse.RawDescriptionHelpFormatter,
