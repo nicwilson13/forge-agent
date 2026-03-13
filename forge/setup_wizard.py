@@ -45,13 +45,19 @@ def _write_file_atomic(path: Path, content: str) -> None:
 # Format helpers
 # ---------------------------------------------------------------------------
 
-def format_requirements_md(form_data: dict) -> str:
+def format_requirements_md(form_data) -> str:
     """
     Convert wizard form data to REQUIREMENTS.md content.
 
-    Expects keys: core_features, pages_routes, data_models, non_functional.
-    Each is a string (textarea content) where each line becomes a checkbox item.
+    Accepts a string (single textarea) or a dict (legacy multi-field form).
     """
+    if isinstance(form_data, str):
+        text = form_data.strip()
+        if text:
+            return f"# REQUIREMENTS.md\n\n{text}\n"
+        return "# REQUIREMENTS.md\n"
+
+    # Legacy dict format: keys core_features, pages_routes, etc.
     sections = [
         ("Core Features", form_data.get("core_features", "")),
         ("Pages and Routes", form_data.get("pages_routes", "")),
@@ -513,27 +519,13 @@ _SETUP_CONTENT = """
     <div class="card p-6">
       <h2 class="text-lg font-bold mb-4">Step 3 <span style="color:#555">/ Requirements</span></h2>
       <p class="text-sm mb-4" style="color:#888">
-        Enter one item per line in each section. These become your build requirements.
+        Describe what the app must do &mdash; features, pages, data models, constraints.
+        Paste an existing requirements doc or write freeform.
       </p>
       <div class="mb-4">
-        <label class="block text-sm mb-2" style="color:#888">Core Features (what users can do)</label>
-        <textarea id="req-features" class="input-field" style="min-height:100px"
-                  placeholder="User registration and login&#10;Create and edit projects&#10;Real-time collaboration"></textarea>
-      </div>
-      <div class="mb-4">
-        <label class="block text-sm mb-2" style="color:#888">Pages and Routes</label>
-        <textarea id="req-pages" class="input-field" style="min-height:80px"
-                  placeholder="Landing page&#10;Dashboard&#10;Settings page"></textarea>
-      </div>
-      <div class="mb-4">
-        <label class="block text-sm mb-2" style="color:#888">Data Models</label>
-        <textarea id="req-data" class="input-field" style="min-height:80px"
-                  placeholder="User (email, name, role)&#10;Project (title, description, members)"></textarea>
-      </div>
-      <div class="mb-4">
-        <label class="block text-sm mb-2" style="color:#888">Non-Functional Requirements</label>
-        <textarea id="req-nonfunc" class="input-field" style="min-height:80px"
-                  placeholder="Page load under 2 seconds&#10;Mobile responsive&#10;WCAG 2.1 AA accessible"></textarea>
+        <label class="block text-sm mb-2" style="color:#888">Requirements</label>
+        <textarea id="req-text" class="input-field" style="min-height:200px"
+                  placeholder="## Core Features&#10;- User registration and login&#10;- Create and edit projects&#10;&#10;## Pages&#10;- Landing page&#10;- Dashboard&#10;&#10;## Data Models&#10;- User (email, name, role)&#10;- Project (title, description, members)"></textarea>
       </div>
       <div class="flex justify-between mt-6">
         <button class="btn-secondary" onclick="prevStep(3)">&larr; Back</button>
@@ -854,12 +846,7 @@ async function startBuilding() {
     name: document.getElementById('app-name').value,
     description: document.getElementById('app-description').value,
     vision: document.getElementById('vision-text').value,
-    requirements: {
-      core_features: document.getElementById('req-features').value,
-      pages_routes: document.getElementById('req-pages').value,
-      data_models: document.getElementById('req-data').value,
-      non_functional: document.getElementById('req-nonfunc').value
-    },
+    requirements: document.getElementById('req-text').value,
     integrations: collectIntegrations()
   };
 

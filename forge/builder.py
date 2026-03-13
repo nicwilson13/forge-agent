@@ -84,12 +84,14 @@ async def _run_task_async(project_dir: Path, prompt: str,
     Returns:
         A tuple of (success, full_output, error_message, duration_seconds).
     """
+    import shutil
     from claude_code_sdk import (
         query, ClaudeCodeOptions,
         AssistantMessage, ResultMessage, SystemMessage,
         TextBlock, ToolUseBlock, ToolResultBlock,
         ClaudeSDKError, CLINotFoundError, CLIConnectionError, ProcessError,
     )
+    from claude_code_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
 
     options = ClaudeCodeOptions(
         cwd=str(project_dir),
@@ -97,11 +99,18 @@ async def _run_task_async(project_dir: Path, prompt: str,
         model=model,
     )
 
+    # Resolve CLI path once so parallel tasks don't race on shutil.which
+    cli_path = shutil.which("claude")
+
     output_parts: list[str] = []
     start_time = time.time()
 
     try:
-        async for message in query(prompt=prompt, options=options):
+        transport = SubprocessCLITransport(
+            prompt=prompt, options=options, cli_path=cli_path
+        ) if cli_path else None
+        async for message in query(prompt=prompt, options=options,
+                                   transport=transport):
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):

@@ -300,6 +300,26 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
                     linear_issues=linear_issues
                 )
                 checkpoint.atomic_save(project_dir, state)
+
+                # If no tasks succeeded and any hit fatal errors, stop the build
+                if completed == 0:
+                    interrupted = [
+                        t for t in phase.tasks
+                        if t.status == TaskStatus.INTERRUPTED
+                        and t.interrupt_reason
+                        and is_fatal_error(t.interrupt_reason)
+                    ]
+                    if interrupted:
+                        reason = interrupted[0].interrupt_reason
+                        _handle_fatal_error(
+                            project_dir, state, None,
+                            FatalAPIError(
+                                reason,
+                                f"All parallel tasks failed with fatal error: {reason}",
+                                "Check your API key and credentials",
+                            ),
+                            logger,
+                        )
                 continue
 
         # Check-in gate
@@ -833,6 +853,8 @@ async def _run_phase_parallel(
             )
             success = task.status == TaskStatus.DONE
             return TaskResult(task.id, success, time.time() - start)
+        except (SystemExit, KeyboardInterrupt):
+            raise  # Never swallow process-terminating signals
         except Exception as e:
             return TaskResult(task.id, False, time.time() - start,
                               error=str(e))
