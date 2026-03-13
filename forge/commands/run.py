@@ -179,10 +179,16 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
     except (AttributeError, OSError):
         pass  # non-standard stdout (e.g. test harness)
 
-    # Tee all output to a log file for post-mortem debugging
-    log_path = project_dir / ".forge" / "run_output.log"
-    tee = _TeeWriter(sys.stdout, log_path)
-    sys.stdout = tee
+    # Tee all output to a log file for post-mortem debugging.
+    # Skip when stdout is already redirected to a file (e.g. setup wizard subprocess).
+    tee = None
+    try:
+        if sys.stdout.isatty():
+            log_path = project_dir / ".forge" / "run_output.log"
+            tee = _TeeWriter(sys.stdout, log_path)
+            sys.stdout = tee
+    except (AttributeError, OSError):
+        pass
 
     try:
         _validate_project(project_dir)
@@ -195,8 +201,9 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
 
         anyio.run(_main)
     finally:
-        sys.stdout = tee._original
-        tee.close_log()
+        if tee is not None:
+            sys.stdout = tee._original
+            tee.close_log()
 
 
 async def _run_forge_async(project_dir: Path, checkin_every: int = 10,

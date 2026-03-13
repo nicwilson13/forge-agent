@@ -204,8 +204,8 @@ def start_forge_run_subprocess(project_dir: Path) -> None:
                 | subprocess.CREATE_NO_WINDOW
             )
         subprocess.Popen(
-            [sys.executable, "-m", "forge", "run",
-             "--project-dir", str(project_dir)],
+            [sys.executable, "-m", "forge",
+             "--project-dir", str(project_dir), "run"],
             stdout=log_file,
             stderr=log_file,
             cwd=str(project_dir),
