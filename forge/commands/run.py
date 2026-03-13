@@ -6,6 +6,7 @@ import asyncio
 import signal
 import sys
 import time
+import traceback
 from pathlib import Path
 
 from forge import orchestrator, builder, git_utils, needs_human, display, checkpoint
@@ -40,6 +41,12 @@ from forge.linear_integration import (
 _current_task: Task | None = None
 _current_project_dir: Path | None = None
 _current_state: ForgeState | None = None
+
+
+class _BuildLoopExit(Exception):
+    """Raised instead of sys.exit() inside async context for clean shutdown."""
+    def __init__(self, code: int):
+        self.code = code
 
 
 def _setup_interrupt_handler(project_dir: Path, state: ForgeState,
@@ -96,7 +103,7 @@ def _handle_fatal_error(project_dir: Path, state: ForgeState,
     if error.fix_instruction:
         print(f"  Fix: {error.fix_instruction}")
     print(f"\n  State saved. Run `forge run` after fixing the issue.")
-    sys.exit(1)
+    raise _BuildLoopExit(1)
 
 
 def _handle_retry_exhausted(project_dir: Path, state: ForgeState,
@@ -111,7 +118,7 @@ def _handle_retry_exhausted(project_dir: Path, state: ForgeState,
     print(f"\n  {display.SYM_FAIL} API unavailable after {error.attempts} attempts. Build paused.\n")
     print(f"  State saved to .forge/state.json")
     print(f"  Run `forge run` when the API is available to resume.")
-    sys.exit(0)
+    raise _BuildLoopExit(0)
 
 
 def _print_startup_diagnostics(project_dir: Path):
@@ -138,6 +145,23 @@ def _print_startup_diagnostics(project_dir: Path):
     # This exits with a helpful message if the SDK is missing
     builder._check_sdk_available()
     print()
+
+
+def _install_crash_log(project_dir: Path):
+    """Set sys.excepthook to capture tracebacks when stdout is not a TTY."""
+    log_path = project_dir / ".forge" / "run_output.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _hook(exc_type, exc_value, exc_tb):
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write("\n--- UNHANDLED CRASH ---\n")
+                traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
+        except Exception:
+            pass
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _hook
 
 
 class _TeeWriter:
@@ -187,6 +211,8 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
             log_path = project_dir / ".forge" / "run_output.log"
             tee = _TeeWriter(sys.stdout, log_path)
             sys.stdout = tee
+        else:
+            _install_crash_log(project_dir)
     except (AttributeError, OSError):
         pass
 
@@ -200,6 +226,25 @@ def run_forge(project_dir: Path, checkin_every: int = 10,
             await _run_forge_async(project_dir, checkin_every, max_retries, dry_run)
 
         anyio.run(_main)
+    except _BuildLoopExit as e:
+        sys.exit(e.code)
+    except Exception:
+        # Log the crash to build.log and save checkpoint before dying
+        try:
+            logger = BuildLogger(project_dir)
+            logger.fatal_error("UNHANDLED_CRASH", traceback.format_exc())
+        except Exception:
+            pass
+        try:
+            if _current_state is not None:
+                checkpoint.atomic_save(project_dir, _current_state)
+        except Exception:
+            pass
+        print(
+            f"\n  [forge] Unexpected crash. Details in .forge/build.log",
+            file=sys.stderr,
+        )
+        raise
     finally:
         if tee is not None:
             sys.stdout = tee._original
@@ -236,9 +281,11 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
     display.print_forge_header(project_dir.name)
     log_mcp_status(mcp_config)
 
-    # Start web dashboard
+    # Start web dashboard (register atexit so it stops even on crash)
+    import atexit
     from forge.dashboard import start_dashboard, stop_dashboard, update_dashboard_state
     dashboard_thread = start_dashboard(project_dir, run_mode=True)
+    atexit.register(stop_dashboard)
 
     if dry_run:
         print(f"  Mode: dry run")
@@ -282,6 +329,7 @@ async def _run_forge_async(project_dir: Path, checkin_every: int = 10,
         })
         if dry_run:
             display.print_dry_run_plan(state.phases)
+            stop_dashboard()
             return
 
     logger.session_started(
@@ -638,18 +686,26 @@ async def _execute_task(project_dir: Path, state: ForgeState, phase: Phase,
         state.tasks_since_checkin += 1
         return
 
-    # Build the prompt
-    prompt = orchestrator.build_task_prompt(project_dir, phase, task)
-
-    # Determine model for this task
-    model, reason = route_task(
-        task.title,
-        task.description,
-        retry_count=task.retry_count,
-        previous_model=task.last_model or None,
-    )
-    log_route(f"task: {task.title[:20]}", model, reason)
-    task.last_model = model
+    # Build the prompt and determine model
+    try:
+        prompt = orchestrator.build_task_prompt(project_dir, phase, task)
+        model, reason = route_task(
+            task.title,
+            task.description,
+            retry_count=task.retry_count,
+            previous_model=task.last_model or None,
+        )
+        log_route(f"task: {task.title[:20]}", model, reason)
+        task.last_model = model
+    except Exception as e:
+        task.status = TaskStatus.FAILED
+        task.notes = (task.notes or "") + f"\nPrompt build error: {e}"
+        if logger:
+            logger.task_failed(state.current_phase_index, task.id,
+                               f"prompt_build_error: {e}")
+        if not locks:
+            _clear_interrupt_handler()
+        return
 
     # Call Claude Code
     try:

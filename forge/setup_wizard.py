@@ -203,7 +203,7 @@ def start_forge_run_subprocess(project_dir: Path) -> None:
                 subprocess.CREATE_NEW_PROCESS_GROUP
                 | subprocess.CREATE_NO_WINDOW
             )
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [sys.executable, "-m", "forge",
              "--project-dir", str(project_dir), "run"],
             stdout=log_file,
@@ -211,6 +211,7 @@ def start_forge_run_subprocess(project_dir: Path) -> None:
             cwd=str(project_dir),
             **kwargs,
         )
+        log_file.close()  # subprocess inherits the handle; avoid leak
     except Exception:
         # Create the log file anyway so the wait loop detects it
         try:

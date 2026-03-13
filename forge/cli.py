@@ -41,6 +41,28 @@ def _load_dotenv():
 
 
 def main():
+    try:
+        _main_inner()
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except SystemExit:
+        raise
+    except Exception:
+        import traceback
+        # Persist the traceback so silent subprocess crashes leave a trail
+        try:
+            log_path = Path(".forge") / "run_output.log"
+            if log_path.parent.exists():
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write("\n--- UNHANDLED CRASH ---\n")
+                    traceback.print_exc(file=f)
+        except Exception:
+            pass
+        traceback.print_exc()
+        sys.exit(1)
+
+
+def _main_inner():
     _load_dotenv()
 
     parser = argparse.ArgumentParser(
